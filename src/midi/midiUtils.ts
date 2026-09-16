@@ -1,15 +1,6 @@
 // src/midi/midiUtils.ts
 import type { Midi } from "@tonejs/midi";
-import type {Note, MidiLyric, ScoreModel} from "../audio/Types";
-
-export type KeyName =
-    "C" | "C#" | "Db" |
-    "D" | "D#" | "Eb" |
-    "E" |
-    "F" | "F#" | "Gb" |
-    "G" | "G#" | "Ab" |
-    "A" | "A#" | "Bb" |
-    "B";
+import type {Note, ScoreModel} from "../audio/Types";
 
 export const majorKeys = [
     "Cb", "Gb", "Db", "Ab", "Eb", "Bb", "F",
@@ -62,61 +53,46 @@ export function keySignatureName(sf:number, minorFlag:boolean):string {
 }
 
 /** Convert MusicXML (fifths + mode) into a typed KeyName */
-export function keyNameFromFifths(
-    sf: number,
-    isMinor: boolean
-): KeyName {
-    const index = sf + 7;
+// export function keyNameFromFifths(
+//     sf: number,
+//     isMinor: boolean
+// ): KeyName {
+//     const index = sf + 7;
+//
+//     const name = isMinor
+//         ? minorKeys[index]
+//         : majorKeys[index];
+//
+//     // Strip the trailing "m" for minor keys → convert "Ebm" → "Eb"
+//     return (isMinor
+//         ? name.replace("m", "")
+//         : name) as KeyName;
+// }
 
-    const name = isMinor
-        ? minorKeys[index]
-        : majorKeys[index];
+export function keyNameFromFifths(fifths: number, mode: string): string {
+    // Standard circle-of-fifths mapping
+    const sharpKeys = ["C", "G", "D", "A", "E", "B", "F#", "C#"];
+    const flatKeys  = ["C", "F", "Bb", "Eb", "Ab", "Db", "Gb", "Cb"];
 
-    // Strip the trailing "m" for minor keys → convert "Ebm" → "Eb"
-    return (isMinor
-        ? name.replace("m", "")
-        : name) as KeyName;
-}
+    const name = fifths >= 0
+        ? sharpKeys[fifths] ?? "C"
+        : flatKeys[-fifths] ?? "C";
 
-export function getInitialKey(score: ScoreModel): {
-    key: KeyName;
-    isMinor: boolean;
-} {
-    if (score.keyChanges.length === 0) {
-        return { key: "C", isMinor: false };
-    }
+    // Normalize mode text
+    const modeName = mode.toLowerCase() === "minor" ? "minor" : "major";
 
-    const first = score.keyChanges[0];
-    const isMinor = first.mode.toLowerCase() === "minor";
-    const key = keyNameFromFifths(first.fifths, isMinor);
-
-    return {
-        key,
-        isMinor
-    };
+    return `${name} ${modeName}`;
 }
 
 
-
-export function getTonicPC(key: KeyName): number {
-    return keyToPc[key];
-}
-
-export function tonicBelow(key:KeyName, midiNote:number):number
-{
-    // tonic pitch class
-    const tonicPc = getTonicPC(key);
-
-    // find tonic in the same octave as midiNote
-    let tonicBelow = tonicPc + 12 * Math.floor(midiNote / 12);
-
-    // if tonic is above the note, drop one octave
-    if (tonicBelow > midiNote) {
-        tonicBelow -= 12;
-    }
-
-    return tonicBelow;
-}
+// export function getInitialKey(score: ScoreModel): string {
+//     if (score.keyChanges.length === 0) {
+//         return "C major";
+//     }
+//
+//     const first = score.keyChanges[0];
+//     return keyNameFromFifths(first.fifths, first.mode);
+// }
 
 export type PitchClass = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
 
@@ -124,16 +100,16 @@ export function transposeTonic(tonic: PitchClass, semitones: number): PitchClass
     return ((tonic + semitones + 12) % 12) as PitchClass;
 }
 
-export function buildScale(key: KeyName, isMinor: boolean): number[] {
-    const tonic = getTonicPC(key);
-
-    const majorPattern = [0, 2, 4, 5, 7, 9, 11] as const;
-    const minorPattern = [0, 2, 3, 5, 7, 8, 10] as const;
-
-    const pattern = isMinor ? minorPattern : majorPattern;
-
-    return pattern.map(pc => (pc + tonic) % 12);
-}
+// export function buildScale(key: KeyName, isMinor: boolean): number[] {
+//     const tonic = getTonicPC(key);
+//
+//     const majorPattern = [0, 2, 4, 5, 7, 9, 11] as const;
+//     const minorPattern = [0, 2, 3, 5, 7, 8, 10] as const;
+//
+//     const pattern = isMinor ? minorPattern : majorPattern;
+//
+//     return pattern.map(pc => (pc + tonic) % 12);
+// }
 
 export function mapToDiatonicLane(
     midiNote: number,
@@ -274,32 +250,35 @@ export function midiToFreq(midi: number): number {
     return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
-export function flattenToMidiNotes(midi: Midi): Note[] {
-    return midi.tracks.flatMap(track =>
-        track.notes.map(n =>
-            makeNote(
-                n.midi,
-                n.time,        // unified field name
-                n.duration,
-                n.velocity,
-                0,             // MIDI has no parts
-                null           // MIDI lyrics handled separately
-            )
-        )
-    );
-}
+// export function flattenToMidiNotes(midi: Midi): Note[] {
+//     return midi.tracks.flatMap(track =>
+//         track.notes.map(n =>
+//             makeNote(
+//                 n.midi,
+//                 n.time,        // unified field name
+//                 n.duration,
+//                 n.velocity,
+//                 0,             // MIDI has no parts
+//                 null           // MIDI lyrics handled separately
+//             )
+//         )
+//     );
+// }
 
 
-function makeNote(
-    midi: number,
-    start: number,
-    duration: number,
-    velocity: number,
-    partIndex: number,
-    lyric: string | null
-): Note {
-    return { midi, start, duration, velocity, partIndex, lyric };
-}
+// function makeNote(
+//     midi: number,
+//     start: number,
+//     duration: number,
+//     measureIndex: number,
+//     velocity: number,
+//     partIndex: number,
+//     lyric: string | null
+// ): Note {
+//     return { midi, start, duration, measureIndex,velocity, partIndex, lyric };
+// }
+
+/* we are going to drop midi
 
 export function flattenToFormat0(midi: Midi): Note[] {
 
@@ -315,6 +294,7 @@ export function flattenToFormat0(midi: Midi): Note[] {
                 n.midi,
                 n.ticks * secondsPerTick,
                 n.durationTicks * secondsPerTick,
+                0,
                 n.velocity,
                 0,          // MIDI has no parts
                 null
@@ -366,7 +346,33 @@ export function extractNotes(midi: Midi, part: number): Note[] {
     // Invalid part index → return empty
     return [];
 }
+*/
 
+// need for MusicXml (and maybe midi)
+export function mergeTies(notes: Note[]): Note[] {
+    const merged: Note[] = [];
+    let last: Note | null = null;
+
+    for (const n of notes) {
+        if (
+            last &&
+            last.midi === n.midi &&
+            last.partIndex === n.partIndex &&
+            Math.abs(last.start + last.duration - n.start) < 0.0001
+        ) {
+            console.log("Tie added");
+            // extend the previous note instead of retriggering
+            last.duration += n.duration;
+        } else {
+            merged.push(n);
+            last = n;
+        }
+    }
+
+    return merged;
+}
+
+/*
 export function extractNotesAndLyrics(midi: Midi, part: number): Note[] {
 
     // -1 means "all parts"
@@ -381,6 +387,7 @@ export function extractNotesAndLyrics(midi: Midi, part: number): Note[] {
                 note.midi,
                 note.start,
                 note.duration,
+                note.measureIndex,
                 note.velocity,
                 0, // MIDI has no partIndex
                 lyric ? lyric.text : null
@@ -410,5 +417,5 @@ export function extractNotesAndLyrics(midi: Midi, part: number): Note[] {
     // Invalid part index → return empty
     return [];
 }
-
+*/
 

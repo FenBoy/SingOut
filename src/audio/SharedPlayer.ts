@@ -1,14 +1,12 @@
-/*
-    replaced by SharedPlayer
- */
-/*
 import * as Tone from "tone";
 import type {Midi} from "@tonejs/midi";
 import * as MidiUtils from "../midi/midiUtils";
-import type {Note} from "./Types";
+import type {Note, ScoreModel} from "./Types";
 import {type IPlayer, PlaySession} from "./PlaySession";
 
-export class MidiPlayer implements IPlayer{
+// plays midi or music xml
+
+export class SharedPlayer implements IPlayer{
     private synth: Tone.PolySynth;
     session: PlaySession;
     private timer: ReturnType<typeof setTimeout> | null = null;
@@ -24,14 +22,40 @@ export class MidiPlayer implements IPlayer{
         this.synth.toDestination();
     }
 
-    setMidi(midi: Midi) {
-        this.notes = MidiUtils.mergeTies(MidiUtils.flattenToMidiNotes(midi));
-        const latestNote = this.notes.reduce(
-            (a, b) => (a.start > b.start ? a : b)
-        );
+    // no longer support midi
+    // setMidi(midi: Midi) {
+    //     this.notes = MidiUtils.mergeTies(MidiUtils.flattenToMidiNotes(midi));
+    //     const latestNote = this.notes.reduce(
+    //         (a, b) => (a.start > b.start ? a : b)
+    //     );
+    //
+    //     this.maxTime = latestNote.start + latestNote.duration;
+    // }
 
-        this.maxTime = latestNote.start + latestNote.duration;
+    setMusicXml(model: ScoreModel) {
+        this.notes = model.notes
+            .map(n => ({
+                midi: n.pitch,
+                start: n.startTime,
+                duration: n.duration,
+                measureIndex: n.measureIndex,
+                velocity: 0.8,
+                partIndex: n.partIndex,
+                lyric: n.lyric ?? null
+            }) satisfies Note);
+
+        this.notes.sort((a, b) => a.start - b.start);
+
+        // console.log("PARTS FOUND:", new Set(this.notes.map(n => n.partIndex)));
+
+        let max = 0;
+        for (const n of this.notes) {
+            const end = n.start + n.duration;
+            if (end > max) max = end;
+        }
+        this.maxTime = max;
     }
+
 
     getMaxTime(): number {
         return this.maxTime;
@@ -60,14 +84,14 @@ export class MidiPlayer implements IPlayer{
             while (index < this.notes.length && this.notes[index].start <= now) {
                 const n = this.notes[index];
 
-                console.log(
-                    "FIRE:",
-                    "part:", n.partIndex,
-                    "midi:", n.midi,
-                    "start:", n.start.toFixed(4),
-                    "duration:", n.duration.toFixed(4),
-                    "index", index
-                );
+                // console.log(
+                //     "FIRE:",
+                //     "part:", n.partIndex,
+                //     "midi:", n.midi,
+                //     "start:", n.start.toFixed(4),
+                //     "duration:", n.duration.toFixed(4),
+                //     "index", index
+                // );
 
                 this.synth.triggerAttackRelease(
                     Tone.Frequency(n.midi, "midi").toFrequency(),
@@ -104,4 +128,3 @@ export class MidiPlayer implements IPlayer{
         this.clearTimer();
     }
 }
-*/

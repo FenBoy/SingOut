@@ -11,6 +11,9 @@ export interface Note {
     velocity: number;
     partIndex: number;      // 0 for MIDI, actual part for MusicXML
     lyric: string | null;
+    measureIndex: number;
+    hit?: boolean;
+    bestCents?: number;
 }
 
 /* -----------------------------

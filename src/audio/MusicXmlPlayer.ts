@@ -1,6 +1,12 @@
+
+/*
+
+    replaced by SharedPlayer
+
 import * as Tone from "tone";
-import type { ScoreModel } from "./Types";
+import type {Note, ScoreModel} from "./Types";
 import { type IPlayer, PlaySession } from "./PlaySession";
+import * as MidiUtils from "../midi/midiUtils";
 
 export class MusicXmlPlayer implements IPlayer {
     private synth: Tone.PolySynth;
@@ -9,12 +15,7 @@ export class MusicXmlPlayer implements IPlayer {
     private isPlaying: boolean = false;
     private model: ScoreModel | null = null;
 
-    private notes: {
-        midi: number;
-        time: number;
-        duration: number;
-        velocity: number;
-    }[] = [];
+    notes: Note[] = [];
 
     maxTime: number = 0;
 
@@ -26,18 +27,20 @@ export class MusicXmlPlayer implements IPlayer {
     setMusicXml(model: ScoreModel) {
         this.model = model;
 
-        // Convert ScoreModel notes → playable notes
-        this.notes = model.notes.map(n => ({
-            midi: n.pitch,
-            time: n.startTime,
-            duration: n.duration,
-            velocity: 0.8
-        }));
+        this.notes = MidiUtils.mergeTies(model.notes
+            .map(n => ({
+                midi: n.pitch,
+                start: n.startTime,
+                duration: n.duration,
+                velocity: 0.8,
+                partIndex: n.partIndex,
+                lyric: n.lyric ?? null
+            }) satisfies Note));
 
         // Compute max time
         let max = 0;
         for (const n of this.notes) {
-            const end = n.time + n.duration;
+            const end = n.start + n.duration;
             if (end > max) max = end;
         }
         this.maxTime = max;
@@ -97,3 +100,5 @@ export class MusicXmlPlayer implements IPlayer {
         this.clearTimer();
     }
 }
+
+ */

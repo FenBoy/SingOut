@@ -1,44 +1,57 @@
 import type {Note, ScoreModel} from "../audio/Types";
 import * as MidiUtils from "../midi/midiUtils";
-import type { KeyName, mapToLane, freqToCents } from "../midi/midiUtils";
-import type {Midi} from "@tonejs/midi";
 import { playMidi } from "../audio/NotePlayer";
 import {PlaySession} from "../audio/PlaySession";
-
-export interface PianoRollNote {
-    midi: number;
-    start: number;
-    duration: number;
-    velocity: number;
-    partIndex: number;
-    lyric: string | null;   // NEW
-}
-
+import * as MxmlUtils from "../midi/musicXmlUtils"
 
 export class PianoRoll {
     canvas: HTMLCanvasElement;
     ctx: CanvasRenderingContext2D;
     session: PlaySession;
 
-    key: KeyName = "C";
-    minor = false;
+    private tonicPc: number = 0;
+    private scalePcs: number[] = [];
 
     gridSize = 15;
     noteHeight = 30;
+    noteScale = 2.5;   // 160% size, tweak to taste
+
     pitchHeight = 30; // maybe if we want smaller, (logic needs fixing)
     xScale = 100;
     chromaticStep = 5;
 
-    tonicMidi = -1;
     lowestMidi = -1;
     highestMidi = -1;
+
+    // cut off any pitches outside the midi range +/- cutoff
+    cutOff: number = 6;
 
     pitch = 0;
     cents = 0;
 
+    model : ScoreModel | null = null;
+
     notes: Note[] = [];
+    private measureBoundaries: { measure: number; start: number }[] = [];
+    private keyChangeBoundaries: { measure: number; start: number; fifths: number; mode: string }[] = [];
+
     tempo = 0;
-    scheduledNotes: Note[] = [];
+
+    heldBlocks: {
+        midi: number;           // sung MIDI
+        expectedMidi: number | null;
+        start: number;
+        end: number;
+        centsSamples: number[];
+    }[] = [];
+
+    currentHeld: {
+        midi: number;
+        expectedMidi: number | null;
+        start: number;
+        centsSamples: number[];
+    } | null = null;
+
 
     isLooping = false;
     playHeadPos = 2;
@@ -50,33 +63,29 @@ export class PianoRoll {
     highestTime: number = 0;
     headOffset: number = 2;
 
-    laneColors = [
-        "#ffffff",
-        "#eeff00",
-        "#65f70b",
-        "#1100ff",
-        "#000000",
-        "#e2163f",
-        "#ff00ea"
-    ];
+    HIT_COLORS = {
+        gold:   "#ffcc00",
+        silver: "#918a44",
+        bronze: "#ff9900",
+        miss:   "rgb(255 0 0)"
+    };
 
-    // if we colour parts
-    PART_COLORS = [
-        "#4FC3F7", // part 0
-        "#81C784", // part 1
-        "#FFB74D", // part 2
-        "#E57373", // part 3
-        "#BA68C8", // part 4
-    ];
+    HIT_ACTIVE_COLORS = {
+        gold:   "#ffd84d",
+        silver: "#f8f8f8",
+        bronze: "#ffb347",
+        miss:   "#ff6666"
+    };
 
-    // feedback
-    currentMidi: number | null = null;
-    currentCents: number | null = null;
-    currentTime: number = 0;
-    currentNoteIndex: number | null = null;
-    currentInTune: boolean = false;
+    MISS_COLOR = "rgb(255 0 0)";
 
-    pitchBlocks: { time: number; pitch: number; n: Note | null;}[] = [];
+    MISS_ACTIVE_COLOR = "#ff4444";
+
+    STANDARD_NOTE : string = "#1d1dc1";
+
+    ACTIVE_NOTE: string =  "#cc1e1e";
+
+    // pitchBlocks: { time: number; pitch: number; n: Note | null;}[] = [];
 
     constructor(canvas: HTMLCanvasElement,session: PlaySession) {
         this.canvas = canvas;
@@ -84,7 +93,6 @@ export class PianoRoll {
         const ctx = canvas.getContext("2d");
         if (!ctx) throw new Error("Canvas 2D context unavailable");
         this.ctx = ctx;
-        this.key = "C";
         this.attachScrollHandlers();
     }
 
@@ -130,32 +138,46 @@ export class PianoRoll {
         });
     }
 
+    private snapToDiatonic(midi: number): number {
+        const pc = Math.round(midi) % 12;
+
+        // Find nearest diatonic pitch class
+        let bestPc = this.scalePcs[0];
+        let bestDist = Math.abs(pc - bestPc);
+
+        for (const dpc of this.scalePcs) {
+            const dist = Math.abs(pc - dpc);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestPc = dpc;
+            }
+        }
+
+        // Replace pitch class, keep octave
+        const octave = Math.floor(midi / 12);
+        return octave * 12 + bestPc;
+    }
+
     private handleClick(e: MouseEvent) {
         const rect = this.canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left + this.scrollX; // account for scroll
+        const x = e.clientX - rect.left + this.scrollX;
         const y = e.clientY - rect.top;
 
+        const t = this.session.getCurrentTime();
+
+        // --- 1. Try clicking a note ---
         for (const n of this.notes) {
-            const { lane, octave, offset } = MidiUtils.mapToLane(
-                this.tonicMidi,
-                this.minor,
-                n.midi
-            );
-
-            const rowIndex = octave * 7 + lane;
-
-            const noteY = this.canvas.height - (rowIndex + 1) * this.noteHeight
-                + offset * this.chromaticStep;
-
-            const noteX = n.start * this.xScale;
+            const noteX = (n.start - (t - this.headOffset)) * this.xScale;
             const noteW = n.duration * this.xScale;
-            const noteH = this.noteHeight;
+
+            const yTop = this.midiToY(n.midi + 1);
+            const yBottom = this.midiToY(n.midi);
 
             const hit =
                 x >= noteX &&
                 x <= noteX + noteW &&
-                y >= noteY &&
-                y <= noteY + noteH;
+                y >= yTop &&
+                y <= yBottom;
 
             if (hit) {
                 this.onNoteClicked(n);
@@ -163,17 +185,13 @@ export class PianoRoll {
             }
         }
 
-        // --- 2. If no note was clicked, treat it as a lane click ---
-        const lane = Math.floor((this.canvas.height - y) / this.noteHeight);
-        if (lane >= 0 && lane < this.gridSize) {
-            this.onLaneClicked(lane);
-        }
+        // --- 2. No note clicked → play nearest diatonic pitch ---
+        const chromaticMidi = this.yToMidi(y);
+        // const snappedMidi = this.snapToDiatonic(chromaticMidi);
+
+        playMidi(chromaticMidi);
     }
 
-    private onLaneClicked(lane: number) {
-        const midi = MidiUtils.rowToMidi(lane,this.tonicMidi,this.minor);
-        playMidi(midi);
-    }
 
     private onNoteClicked(n: Note) {
         playMidi(n.midi);
@@ -202,30 +220,38 @@ export class PianoRoll {
     }
 
 
-    setMidi(midi: Midi,part:number) {
-        this.notes = MidiUtils.extractNotesAndLyrics(midi,part);
-        this.calculateRange();
-        this.maxScrollX = this.highestTime * this.xScale - this.canvas.width;
-        if (this.maxScrollX < 0) this.maxScrollX = 0;
-    }
+    // setMidi(midi: Midi,part:number) {
+    //     // this.notes = MidiUtils.mergeTies(MidiUtils.extractNotesAndLyrics(midi,part));
+    //     this.notes = MidiUtils.extractNotesAndLyrics(midi,part);
+    //     this.calculateRange();
+    //     this.maxScrollX = this.highestTime * this.xScale - this.canvas.width;
+    //     if (this.maxScrollX < 0) this.maxScrollX = 0;
+    // }
 
     setScore(model: ScoreModel, selectedPartIndex: number) {
+        this.model = model;
         this.notes = model.notes
             .filter(n => selectedPartIndex === -1 || n.partIndex === selectedPartIndex)
             .map(n => ({
                 midi: n.pitch,
                 start: n.startTime,
                 duration: n.duration,
+                measureIndex: n.measureIndex,
                 velocity: 0.8,
                 partIndex: n.partIndex,
                 lyric: n.lyric ?? null
             }) satisfies Note);
 
-        const { key, isMinor } = MidiUtils.getInitialKey(model);
-        this.key = key;
-        this.minor = isMinor;
+        const firstKey = this.model.keyChanges[0];
+        const { fifths, mode } = firstKey;
+
+        this.tonicPc = MxmlUtils.pitchClassFromFifths(fifths);
+        this.scalePcs = MxmlUtils.buildScale(this.tonicPc, mode);
 
         this.calculateRange();
+        this.measureBoundaries = this.computeMeasureBoundaries();
+        this.keyChangeBoundaries = this.computeKeyChangeBoundaries();
+
         this.maxScrollX = this.highestTime * this.xScale - this.canvas.width;
         if (this.maxScrollX < 0) this.maxScrollX = 0;
     }
@@ -237,16 +263,16 @@ export class PianoRoll {
         if (notes.length === 0) return;
 
         // this is more about reading the midi (once)
-        this.lowestMidi = notes.reduce((a, b) => a.midi < b.midi ? a : b).midi;
-        this.highestMidi = notes.reduce((a, b) => a.midi > b.midi ? a : b).midi;
-        this.tonicMidi = MidiUtils.tonicBelow(this.key ?? "C", this.lowestMidi);
+        this.lowestMidi = notes.reduce((a, b) => a.midi < b.midi ? a : b).midi - 1;
+        this.highestMidi = notes.reduce((a, b) => a.midi > b.midi ? a : b).midi + 1;
         this.highestTime = Math.max(...this.notes.map(n => n.start + n.duration));
 
         // this is more about sizing (multiple)
-        this.gridSize = Math.max(this.highestMidi - this.tonicMidi + 1, 7);
+        this.gridSize = Math.max(this.highestMidi - this.lowestMidi + 1, 7);
         this.noteHeight = this.canvas.height / this.gridSize;
         this.maxScrollX = Math.max(0, this.highestTime * this.xScale - this.canvas.width);
     }
+
 
     roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
         ctx.beginPath();
@@ -322,94 +348,275 @@ export class PianoRoll {
     */
 
     private drawLanes() {
-        const { ctx, gridSize, noteHeight } = this;
+        const ctx = this.ctx;
 
-        for (let i = 0; i < gridSize; i++) {
-            const wrappedLane = i % 7;
+        for (let midi = this.lowestMidi; midi <= this.highestMidi; midi++) {
+            const pc = midi % 12;
 
-            // bottom-up drawing
-            const y = ctx.canvas.height - (i + 1) * noteHeight;
+            const yTop = this.midiToY(midi + 1);
+            const yBottom = this.midiToY(midi);
 
-            ctx.fillStyle = this.laneColors[wrappedLane];
-            ctx.fillRect(0, y, ctx.canvas.width, noteHeight);
+            const isTonic = pc === this.tonicPc;
+            const isDiatonic = this.scalePcs.includes(pc);
 
-            // optional chromatic mid-line
-            // ctx.strokeStyle = "#ddd";
-            // ctx.beginPath();
-            // ctx.moveTo(0, y + noteHeight / 2);
-            // ctx.lineTo(ctx.canvas.width, y + noteHeight / 2);
-            // ctx.stroke();
+            ctx.fillStyle = isTonic
+                ? "#ffe8a0"
+                : isDiatonic
+                    ? "#f0f0f0"
+                    : "#e0e0e0";
+
+            ctx.fillRect(0, yTop, this.canvas.width, yBottom - yTop);
         }
     }
 
-    // bar lines when we add them
-    private drawBars()
-    {
-        // const x = beat * this.xScale - this.scrollX;
-        // ctx.moveTo(x, 0);
-        // ctx.lineTo(x, this.canvas.height);
+
+    // maybe do this once
+    private computeMeasureBoundaries(): { measure: number, start: number }[] {
+        if(this.model) {
+            return this.model.measures
+                .filter(m => m.partIndex === 0)
+                .sort((a, b) => a.index - b.index)
+                .map(m => ({
+                    measure: m.index,
+                    start: m.startTime
+                }));
+        }
+        return [];
     }
 
-    // this was the placeholder approach
-    private draw() {
+    computeKeyChangeBoundaries(): { measure: number; start: number; fifths: number; mode: string }[] {
+        const model = this.model;
+        if (!model) return [];
+
+        return model.keyChanges.map(kc => {
+            const measure = model.measures.find(m => m.index === kc.measureIndex && m.partIndex === 0);
+            return {
+                measure: kc.measureIndex,
+                start: measure?.startTime ?? 0,
+                fifths: kc.fifths,
+                mode: kc.mode
+            };
+        });
+    }
+
+    private drawBars() {
         const ctx = this.ctx;
+        const width = this.canvas.width;
+        const height = this.canvas.height;
 
         const t = this.session.getCurrentTime();
+        const xScale = this.xScale;
+        const scrollX = this.scrollX;
+        const headOffset = this.headOffset;
+
+        for (const m of this.measureBoundaries) {
+
+            // EXACT SAME coordinate math as drawTime()
+            const x = (m.start - (t - headOffset)) * xScale - scrollX;
+
+            // Skip bars outside viewport
+            if (x < 0 || x > width) continue;
+
+            // Draw vertical bar line
+            ctx.strokeStyle = "#999";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+
+            // Draw measure number
+            ctx.fillStyle = "#555";
+            ctx.font = "12px sans-serif";
+            ctx.textBaseline = "top";
+            ctx.fillText(`M${m.measure + 1}`, x + 4, 4);
+        }
+    }
+
+    private drawKeyChanges() {
+        const ctx = this.ctx;
+        const width = this.canvas.width;
+
+        const t = this.session.getCurrentTime();
+        const xScale = this.xScale;
+        const scrollX = this.scrollX;
+        const headOffset = this.headOffset;
+
+        for (const kc of this.keyChangeBoundaries) {
+
+            // Same math as drawTime() and drawBars()
+            const x = (kc.start - (t - headOffset)) * xScale - scrollX;
+
+            if (x < 0 || x > width) continue;
+
+            // Draw a small marker line
+            ctx.strokeStyle = "#4a9";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, 20);
+            ctx.stroke();
+
+            // Draw the key label
+            ctx.fillStyle = "#4a9";
+            ctx.font = "12px sans-serif";
+            ctx.textBaseline = "top";
+
+            const keyName = MidiUtils.keyNameFromFifths(kc.fifths, kc.mode);
+            ctx.fillText(keyName, x + 4, 2);
+        }
+    }
+
+    private midiToY(midi: number): number {
+        const range = this.highestMidi - this.lowestMidi;
+        const norm = (midi - this.lowestMidi) / range;
+        return this.canvas.height - norm * this.canvas.height;
+    }
+
+    private yToMidi(y: number): number {
+        const range = this.highestMidi - this.lowestMidi;
+        const norm = 1 - (y / this.canvas.height);
+        const midiFloat = this.lowestMidi + norm * range;
+        return Math.round(midiFloat);
+    }
+
+    private drawExpected() {
+        const ctx = this.ctx;
+        const t = this.session.getCurrentTime();
+
+        const pitch = this.session.getPitch();
+        const hasPitch = this.isValidPitch(pitch);
+        const sungMidi = hasPitch ? MidiUtils.freqToMidi(pitch) : null;
 
         for (const n of this.notes) {
             if (n.start >= (t - this.headOffset)) {
-                const {lane, octave, offset} = MidiUtils.mapToLane(
-                    this.tonicMidi,
-                    this.minor,
-                    n.midi
-                );
 
-                const rowIndex = octave * 7 + lane;
+                // geometry (unchanged)
+                const yTop = this.midiToY(n.midi + 1);
+                const yBottom = this.midiToY(n.midi);
 
-                const y = ctx.canvas.height - (rowIndex + 1) * this.noteHeight
-                    + offset * this.chromaticStep;
+                const baseH = yBottom - yTop;
+                const scaledH = baseH * this.noteScale;
+
+                const y = yTop - (scaledH - baseH) / 2;
+                const h = scaledH;
 
                 const x = (n.start - (t - this.headOffset)) * this.xScale - this.scrollX;
                 const w = n.duration * this.xScale;
-                const h = this.noteHeight;
 
-                const isActive =
-                    t >= n.start &&
-                    t < n.start + n.duration;
+                // your timing model for active note
+                const isActive = t >= n.start && t < n.start + n.duration;
 
-                // we could use the part colour here
-                // combined with the isActive
-                // ctx.fillStyle = PART_COLORS[n.partIndex % PART_COLORS.length];
+                // --- HIT TESTING (current pitch only) ---
+                if (hasPitch && isActive && sungMidi === n.midi) {
+                    const targetFreq = MidiUtils.midiToFreq(n.midi);
+                    const cents = Math.abs(1200 * Math.log2(pitch / targetFreq));
 
-                ctx.fillStyle = isActive ? "#ff4444" : "#3b82f6";
+                    // update best tuning
+                    if (n.bestCents === undefined || cents < n.bestCents) {
+                        n.bestCents = cents;
+                    }
 
-                if(isActive)
-                {
-                    ctx.shadowBlur = 12;
+                    // mark as hit if within tolerance
+                    if (cents < 50) {
+                        n.hit = true;
+                    }
                 }
-                else
-                {
-                    ctx.shadowBlur = 0;
+
+                const isHit = !!n.hit;
+                const best = n.bestCents ?? 999;
+
+                // --- COLOUR SELECTION ---
+/// Determine tuning category
+                let tuningCategory: "gold" | "silver" | "bronze" | "miss";
+
+                if (!isHit) {
+                    tuningCategory = "miss";
+                } else {
+                    if (best < 10) tuningCategory = "gold";
+                    else if (best < 25) tuningCategory = "silver";
+                    else if (best < 50) tuningCategory = "bronze";
+                    else tuningCategory = "miss";
                 }
 
-                ctx.strokeStyle = "#1e40af";    // darker outline
+// Choose colour based on active + hit + not-yet-hit
+                let fill: string;
+
+                if (!isHit && !isActive) {
+                    // NEW: note hasn't been sung yet → blue
+                    fill = this.STANDARD_NOTE;   // your original blue
+                }
+                else if (!isHit && isActive) {
+                    // active but not hit → your original active red
+                    fill = this.ACTIVE_NOTE;
+                }
+                else if (isHit && !isActive) {
+                    // hit but inactive → tuning colours
+                    fill = this.HIT_COLORS[tuningCategory];
+                }
+                else {
+                    // hit + active → brighter tuning colours
+                    fill = this.HIT_ACTIVE_COLORS[tuningCategory];
+                }
+
+                ctx.fillStyle = fill;
+                ctx.strokeStyle = "#1e40af";
                 ctx.lineWidth = 2;
 
                 this.roundRect(ctx, x, y, w, h, 6);
                 ctx.fill();
                 ctx.stroke();
 
-                // draw lyric inside the note box
                 if (n.lyric) {
                     ctx.fillStyle = "white";
-                    ctx.font = "12px sans-serif";
+                    ctx.font = `${8 * this.noteScale}px sans-serif`;
                     ctx.textBaseline = "middle";
-
-                    const textX = x + 4;
-                    const textY = y + h / 2;
-
-                    ctx.fillText(n.lyric, textX, textY);
+                    ctx.fillText(n.lyric, x + 4, y + h / 2);
                 }
+            }
+        }
+    }
+
+
+    private drawExpectedOld() {
+        const ctx = this.ctx;
+        const t = this.session.getCurrentTime();
+
+        for (const n of this.notes) {
+            if (n.start >= (t - this.headOffset)) {
+                const yTop = this.midiToY(n.midi + 1);
+                const yBottom = this.midiToY(n.midi);
+
+                const baseH = yBottom - yTop;
+                const scaledH = baseH * this.noteScale;
+
+// center the scaled note inside the band
+
+                const y = yTop - (scaledH - baseH) / 2;
+                const h = scaledH;
+
+                const x = (n.start - (t - this.headOffset)) * this.xScale - this.scrollX;
+                const w = n.duration * this.xScale;
+
+                const isActive = t >= n.start && t < n.start + n.duration;
+
+                ctx.fillStyle = isActive ? "#ff4444" : "#3b82f6";
+                ctx.shadowBlur = isActive ? 12 : 0;
+
+                ctx.strokeStyle = "#1e40af";
+                ctx.lineWidth = 2;
+
+                this.roundRect(ctx, x, y, w, h, 6);
+                ctx.fill();
+                ctx.stroke();
+
+                if (n.lyric) {
+                    ctx.fillStyle = "white";
+                    ctx.font = `${8 * this.noteScale}px sans-serif`;
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(n.lyric, x + 4, y + h / 2);
+                }
+
             }
         }
     }
@@ -428,24 +635,11 @@ export class PianoRoll {
         ctx.stroke();
     }
 
-    getPitchBlockY(pitch:number)
-    {
-        const midi = MidiUtils.freqToMidi(pitch);
-        const cents = MidiUtils.freqToCents(pitch);
-        const { lane, octave, offset } = MidiUtils.mapToLane(this.tonicMidi, this.minor, midi);
-
-        let rowIndex = octave * 7 + lane;
-        rowIndex = Math.max(0, Math.min(this.gridSize - 1, rowIndex));
-
-        const baseY = this.ctx.canvas.height - (rowIndex + 1) * this.noteHeight;
-        const offsetY = offset * (this.pitchHeight / 2);
-        const centsY = (cents / 100) * (this.pitchHeight / 2);
-        return baseY - offsetY - centsY;
-    }
-
+    /*
     updatePitchBlocks() {
         const pitch = this.session.getPitch();
-        if (pitch <= 0) return;
+
+        if (!this.isValidPitch(pitch)) return;
 
         // we need to compensate for latency
         // so we subtract the latency from the time
@@ -462,177 +656,248 @@ export class PianoRoll {
             n:this.getMidiAt(correctedTime),
         });
     }
+    */
 
-    updateScore()
-    {
+    updateScore() {
         const pitch = this.session.getPitch();
         if (pitch <= 0) return;
-        const midiNote : Note | null = this.getCurrentMidi();
-        if(midiNote)
-        {
-            const midi = MidiUtils.freqToMidi(pitch);
-            const cents = Math.abs(MidiUtils.freqToCents(pitch));
 
-            if(midiNote.midi == midi) {
-                if (cents < 25) {
-                    if (cents < 10) {
-                        this.session.addGold();
-                    }
-                    else
-                    {
-                        this.session.addSilver();
-                    }
-                }
-                else
-                {
-                    this.session.addBronze();
-                }
-            }
-        }
-        else
-        {
-            // singing when you shouldn't !
+        const midiNote: Note | null = this.getCurrentMidi();
+        if (!midiNote) {
             this.session.addPenalty();
+            return;
+        }
+
+        const cents = MidiUtils.freqToCents(pitch);
+        const midi = MidiUtils.freqToMidi(pitch);
+
+        // Determine if singer is close enough to the correct note
+        const midiDiff = midi - midiNote.midi;
+
+        // If singer is within ±100 cents of the target note
+        if (Math.abs(midiDiff) <= 1) {
+
+            const absCents = Math.abs(cents);
+
+            if (absCents < 10) {
+                this.session.addGold();
+            }
+            else if (absCents < 25) {
+                this.session.addSilver();
+            }
+            else {
+                this.session.addBronze();
+            }
         }
     }
 
+    // get the location of the pitch marker, relative to a given note
+    getMidiY(pitch: number, targetMidi: number): number {
+        const targetFreq = MidiUtils.midiToFreq(targetMidi);
+        const cents = 1200 * Math.log2(pitch / targetFreq);
 
-    drawPitchBlocks() {
+        const yTop = this.midiToY(targetMidi + 1);
+        const yBottom = this.midiToY(targetMidi);
+        const semitoneHeight = yBottom - yTop;
+
+        const centsOffset = (cents / 100) * semitoneHeight;
+
+        return yBottom - centsOffset;   // center of pitch inside the band
+    }
+
+    /*
+    drawHeldBlocks() {
         const ctx = this.ctx;
         const now = this.session.getCurrentTime();
         const w = this.canvas.width;
 
-        const blockWidth = 10; // width of each block
+        type PB = { time: number; pitch: number; n: Note | null };
+
+        let currentMidi: number | null = null;
+        let currentExpected: number | null = null;
+        let firstBlock: PB | null = null;
+        let lastBlock: PB | null = null;
+        let centsSum = 0;
+        let centsCount = 0;
+
+        const flushSegment = () => {
+            if (!firstBlock || !lastBlock || currentMidi === null) return;
+
+            // scrolling: same model as drawPitchBlocks
+            const ageStart = now - firstBlock.time;
+            const ageEnd = now - lastBlock.time;
+
+            const xStart = (this.headOffset * this.xScale) - (ageStart * this.xScale);
+            const xEnd = (this.headOffset * this.xScale) - (ageEnd * this.xScale);
+            const width = xEnd - xStart;
+
+            if (xEnd < -20 || xStart > w) return;
+
+            const avgCents = centsCount > 0 ? centsSum / centsCount : 0;
+
+            const midiForHeight = currentExpected ?? currentMidi;
+            const centerY = this.getMidiY(
+                MidiUtils.midiToFreq(midiForHeight),
+                midiForHeight
+            );
+            const topY = centerY - (this.pitchHeight / 2);
+            const h = this.pitchHeight;
+
+            let color;
+
+            if (currentExpected === null) {
+                // singing when they shouldn't
+                color = "rgb(255 0 0)";
+            } else {
+                // normal tuning colours
+                if (avgCents < 10) color = "rgb(255 230 0)";
+                else if (avgCents < 25) color = "rgb(255 230 0)";
+                else if (avgCents < 50) color = "rgb(163 145 74)";
+                else color = "rgb(255 150 0)";
+            }
+
+            ctx.fillStyle = color;
+            ctx.fillRect(xStart, topY, width, h);
+        };
 
         for (const block of this.pitchBlocks) {
-            const age = now - block.time;
+            const sungMidi = MidiUtils.freqToMidi(block.pitch);
+            const expectedMidi = block.n?.midi ?? null;
 
-            const x = (this.headOffset * this.xScale) - (age * this.xScale);
-            const y = this.getPitchBlockY(block.pitch);
+            const targetMidi = expectedMidi ?? sungMidi;
+            const targetFreq = MidiUtils.midiToFreq(targetMidi);
+            const cents = 1200 * Math.log2(block.pitch / targetFreq);
 
-            if (x < -blockWidth) continue; // off-screen → skip
-
-            if(block.n)
-            {
-                const midi = MidiUtils.freqToMidi(block.pitch);
-                const cents = Math.abs(MidiUtils.freqToCents(block.pitch));
-
-                if(block.n.midi == midi)
-                {
-                    if(cents < 25)
-                    {
-                        if(cents < 10)
-                        {
-                            ctx.shadowColor = "rgb(255 255 255)";
-                            ctx.shadowBlur = 20;
-                            ctx.fillStyle = "rgb(113 105 29)";
-                            // ctx.fillRect(x, y, blockWidth, this.pitchHeight);
-
-                            ctx.fillStyle = "rgb(255 230 0)";
-                            ctx.font = "16px sans-serif";
-                            ctx.fillText("⭐", x + 12, y + this.pitchHeight / 2);
-                        }
-                        else {
-
-                            ctx.shadowColor = "rgb(255 255 255)";
-                            ctx.shadowBlur = 12;
-                            ctx.fillStyle = "rgb(113 105 29)";
-                            // ctx.fillRect(x, y, blockWidth, this.pitchHeight);
-
-                            ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-                            ctx.font = "16px sans-serif";
-                            ctx.fillText("✨", x + 12, y + this.pitchHeight / 2);
-                        }
-                    }
-                    else
-                    {
-                        ctx.shadowColor = "rgb(243 242 237 / 0.8)";
-                        ctx.shadowBlur = 12;
-                        ctx.fillStyle = "rgb(85 255 0)";
-                        // ctx.fillRect(x, y, blockWidth, this.pitchHeight);
-
-                        ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-                        ctx.font = "16px sans-serif";
-                        ctx.fillText("🥉", x + 12, y + this.pitchHeight / 2);
-                    }
-                }
-                else
-                {
-                    // when the pitch doesn't match
-                    ctx.shadowBlur = 12;
-                    ctx.fillStyle = "rgb(255 255 255 / 0.15)";
-                    ctx.fillRect(x, y, blockWidth, this.pitchHeight);
-                }
+            if (currentMidi === null) {
+                // start first segment
+                currentMidi = sungMidi;
+                currentExpected = expectedMidi;
+                firstBlock = block;
+                lastBlock = block;
+                centsSum = Math.abs(cents);
+                centsCount = 1;
+                continue;
             }
-            else
-            {
-                // when they shouldn't be singing
-                ctx.shadowColor = "rgb(243 242 237 / 0.8)";
-                ctx.shadowBlur = 12;
-                ctx.fillStyle = "rgb(85 255 0)";
-                // ctx.fillRect(x, y, blockWidth, this.pitchHeight);
 
-                ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
-                ctx.font = "16px sans-serif";
-                ctx.fillText("🤐", x + 12, y + this.pitchHeight / 2);
+            // if either sung MIDI or expected MIDI changes → new segment
+            if (sungMidi !== currentMidi || expectedMidi !== currentExpected) {
+                flushSegment();
+
+                currentMidi = sungMidi;
+                currentExpected = expectedMidi;
+                firstBlock = block;
+                lastBlock = block;
+                centsSum = Math.abs(cents);
+                centsCount = 1;
+            } else {
+                // extend current segment
+                lastBlock = block;
+                centsSum += Math.abs(cents);
+                centsCount++;
             }
         }
 
-        // remove old blocks
-        this.pitchBlocks = this.pitchBlocks.filter(b => (w - (now - b.time) * this.xScale) > -20);
+        // flush final segment
+        flushSegment();
+    }
+*/
+    isValidPitch(pitch:number): boolean
+    {
+        if (pitch == 0) return false;
+
+        const midi = MidiUtils.freqToMidi(pitch);
+        if((midi >= this.lowestMidi - this.cutOff ) && (midi <= this.highestMidi + this.cutOff)) return true;
+
+        return false;
     }
 
     drawPitch() {
         const pitch = this.session.getPitch();
-        if(pitch > 0)
-        {
-                const midi = MidiUtils.freqToMidi(pitch);
-                const cents = MidiUtils.freqToCents(pitch);
-                const { lane, octave, offset } = MidiUtils.mapToLane(this.tonicMidi, this.minor, midi);
+        if (!this.isValidPitch(pitch)) return;
 
-                // compute row index
-                let rowIndex : number = octave * 7 + lane;
+        const ctx = this.ctx;
 
-                // detect out-of-range
-                const tooLow: boolean = rowIndex < 0;
-                const tooHigh: boolean = rowIndex >= this.gridSize;
+        const sungMidi = MidiUtils.freqToMidi(pitch);
 
-                // clamp to grid
-                if (tooLow) rowIndex = 0;
-                if (tooHigh) rowIndex = this.gridSize - 1;
+        // expected note at the current time
+        const t = this.session.getCurrentTime();
 
-                const baseY: number = this.ctx.canvas.height - (rowIndex + 1) * this.noteHeight;
+        const currentNote = this.notes.find(n =>
+            t >= n.start && t < n.start + n.duration
+        );
 
-                // chromatic offset
-                const offsetY: number = offset * (this.noteHeight / 2);
+        const expectedMidi = currentNote?.midi ?? null;
 
-                // cents offset
-                const centsY: number = (cents / 100) * (this.noteHeight / 2);
-                const finalY : number = baseY - offsetY - centsY;
-                const x = (this.headOffset * this.xScale) - (6 / 2);
+        // tuning quality
+        const targetMidi = expectedMidi ?? sungMidi;
+        const targetFreq = MidiUtils.midiToFreq(targetMidi);
+        const cents = 1200 * Math.log2(pitch / targetFreq);
+        const absCents = Math.abs(cents);
 
-                // pitch marker
-                this.ctx.fillStyle = "rgb(243 242 237 / 0.8)";
-                this.ctx.beginPath();
-                this.ctx.arc(x, finalY + this.noteHeight / 2, 6, 0, Math.PI * 2);
-                this.ctx.fill();
+        // band geometry
+        const yTop = this.midiToY(sungMidi + 1);
+        const yBottom = this.midiToY(sungMidi);
+        const semitoneHeight = yBottom - yTop;
 
-                // indicator for too high / too low
-                this.ctx.fillStyle = "#ff4444"; // red warning
+        // cents offset inside the band
+        const centsOffset = (cents / 100) * semitoneHeight;
 
-                if (tooLow) {
-                    // draw a down arrow below the grid
-                    this.ctx.font = "14px sans-serif";
-                    this.ctx.fillText("↓ LOW", x, this.ctx.canvas.height - 5);
-                }
+        // clamp inside band
+        const finalY = Math.max(yTop + 3, Math.min(yBottom - 3, yBottom - centsOffset));
 
-                if (tooHigh) {
-                    // draw an up arrow above the grid
-                    this.ctx.font = "14px sans-serif";
-                    this.ctx.fillText("↑ HIGH", x , 15);
-                }
+        // X position
+        const x = (this.headOffset * this.xScale) - 3;
+
+        // determine tuning category
+        let tuningCategory: "gold" | "silver" | "bronze" | "miss";
+        if (expectedMidi === null) {
+            tuningCategory = "miss";
+        } else {
+            if (absCents < 10) tuningCategory = "gold";
+            else if (absCents < 25) tuningCategory = "silver";
+            else if (absCents < 50) tuningCategory = "bronze";
+            else tuningCategory = "miss";
         }
+
+        // pitch marker colour (simplified)
+        let color;
+        if (expectedMidi === null) {
+            // no note at current time
+            color = this.MISS_COLOR;
+        } else {
+            // inside a note → active colours
+            color = this.HIT_ACTIVE_COLORS[tuningCategory];
+        }
+
+        // draw filled inner circle
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, finalY, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // black outline for inner circle
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, finalY, 6, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // draw outer ring (colored)
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, finalY, 9, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // black outline for outer ring
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, finalY, 9, 0, Math.PI * 2);
+        ctx.stroke();
     }
+
+
 
     drawTime() {
         const ctx = this.ctx;
@@ -648,29 +913,24 @@ export class PianoRoll {
         const visibleStartSec = (t - headOffset) + scrollX / xScale;
         const visibleEndSec = (t - headOffset) + (scrollX + width) / xScale;
 
-        // We draw ticks every 1 second
         const startSec = Math.floor(visibleStartSec);
         const endSec = Math.ceil(visibleEndSec);
 
         for (let sec = startSec; sec <= endSec; sec++) {
 
-            // Convert time → pixel using EXACT same math as notes
             const x = (sec - (t - headOffset)) * xScale - scrollX;
-
             if (x < 0 || x > width) continue;
 
             const is5 = sec % 5 === 0;
             const is10 = sec % 10 === 0;
             const is60 = sec % 60 === 0;
 
-            // Tick height
             const tickHeight =
-                is60 ? 20 :      // minute
-                    is10 ? 14 :      // 10 seconds
-                        is5  ? 10 :      // 5 seconds
-                            6;       // 1 second
+                is60 ? 20 :
+                    is10 ? 14 :
+                        is5  ? 10 :
+                            6;
 
-            // Tick color
             ctx.strokeStyle = is60 ? "#ffffff"
                 : is10 ? "#dddddd"
                     : is5  ? "#bbbbbb"
@@ -678,49 +938,52 @@ export class PianoRoll {
 
             ctx.lineWidth = is60 ? 2 : 1;
 
-            // Draw tick at top
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, tickHeight);
-            ctx.stroke();
-
-            // Draw tick at bottom (optional)
+            // Draw tick ONLY at bottom
             ctx.beginPath();
             ctx.moveTo(x, height);
             ctx.lineTo(x, height - tickHeight);
             ctx.stroke();
 
-            // Labels only for 10s and minutes
+            // Draw text ONLY at bottom
             if (is10) {
-                ctx.fillStyle = is60 ? "#000000" : "#cccccc";
+                ctx.fillStyle = is60 ? "#ffffff" : "#cccccc";
                 ctx.font = is60 ? "16px sans-serif" : "12px sans-serif";
 
-// Show seconds modulo 60 (80s → 20s)
                 const secMod = sec % 60;
+                const label = is60 ? `${sec / 60}m` : `${secMod}s`;
 
-// Only show minutes for big markers (optional)
-                const label = is60
-                    ? `${sec / 60}m`
-                    : `${secMod}s`;
-
-
-                ctx.fillText(label, x + 4, 14);
+                // place text just above the bottom ticks
+                ctx.fillText(label, x + 4, height - tickHeight - 4);
             }
         }
     }
 
+finalizeHeldBlocks() {
+    if (this.currentHeld) {
+        this.heldBlocks.push({
+            midi: this.currentHeld.midi,
+            expectedMidi: this.currentHeld.expectedMidi,
+            start: this.currentHeld.start,
+            end: this.session.getCurrentTime(),
+            centsSamples: this.currentHeld.centsSamples
+        });
+        this.currentHeld = null;
+    }
+}
 
     render() {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.drawLanes();
-        this.draw();
+        this.drawExpected();
         this.drawPlayHead();
         if(this.session.getIsPlaying()) {
-            this.updatePitchBlocks();
+            //this.finalizeHeldBlocks();
+            //this.updatePitchBlocks();
             this.updateScore();
-            this.drawPitchBlocks();
+            //this.drawHeldBlocks();
         }
+        this.drawBars();
         this.drawPitch();
         this.drawTime();
     }

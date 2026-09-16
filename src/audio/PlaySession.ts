@@ -1,12 +1,11 @@
 import { Midi } from "@tonejs/midi";
 import type { Track, Part } from '../useManifest';
-import {MidiPlayer} from "./MidiPlayer";
 import {AudioPlayer} from "./AudioPlayer";
 import {Clock} from "./Clock";
 import { Mic } from "./Mic";
-import {MusicXmlPlayer} from "./MusicXmlPlayer";
 import {parseMusicXml} from "./ParseMusicXml";
 import type {ScoreModel} from "./Types";
+import {SharedPlayer} from "./SharedPlayer";
 import JSZip from "jszip";
 
 export const BASE_URL = "https://raw.githubusercontent.com/FenBoy/GlobalVoices/main";
@@ -32,12 +31,12 @@ export class PlaySession implements IPlayer {
     private latency: number = 0;
 
     private refFormat:MusicFormat = MusicFormat.None;
-    private referenceMidi: Midi | null = null;
+    // private referenceMidi: Midi | null = null; deprecated
     private referenceMusicXml : ScoreModel | null = null;
 
     // stored here for visualisation
     private backingFormat: MusicFormat = MusicFormat.None;
-    private backingMidi: Midi | null = null;
+    // private backingMidi: Midi | null = null; deprecated
     private backingAudio: AudioBuffer | null = null;
     private backingMusicXml : ScoreModel | null = null;
 
@@ -146,13 +145,14 @@ export class PlaySession implements IPlayer {
 
         switch(referenceExtension)
         {
-            case "mid":
-            case "midi":
-            {
-                this.referenceMidi = await this.loadMidi(referenceUrl);
-                this.refFormat = MusicFormat.Midi;
-            }
-            break;
+            // dropping midi as a format
+            // case "mid":
+            // case "midi":
+            // {
+            //     this.referenceMidi = await this.loadMidi(referenceUrl);
+            //     this.refFormat = MusicFormat.Midi;
+            // }
+            // break;
             case "musicxml":
             {
                 this.referenceMusicXml = await this.loadMusicXmlScore(referenceUrl);
@@ -182,20 +182,21 @@ export class PlaySession implements IPlayer {
         {
             switch(referenceExtension)
             {
-                case "mid":
-                case "midi": {
-                    if(this.referenceMidi!= null) {
-                        // don't load it again
-                        this.backingMidi = this.referenceMidi;
-                        this.backingFormat = this.refFormat;
-                        const midi = new MidiPlayer(this);
-                        midi.setMidi(this.backingMidi);
-                        this.player = midi;
-                        this.loopStart = 0;
-                        this.loopEnd = midi.getMaxTime();
-                    }
-                }
-                break;
+                // dropped midi as a format
+                // case "mid":
+                // case "midi": {
+                //     if(this.referenceMidi!= null) {
+                //         // don't load it again
+                //         this.backingMidi = this.referenceMidi;
+                //         this.backingFormat = this.refFormat;
+                //         const midi = new SharedPlayer(this);
+                //         midi.setMidi(this.backingMidi);
+                //         this.player = midi;
+                //         this.loopStart = 0;
+                //         this.loopEnd = midi.getMaxTime();
+                //     }
+                // }
+                // break;
                 case "musicxml":
                 case "mxl":
                 {
@@ -204,7 +205,7 @@ export class PlaySession implements IPlayer {
                         // don't load it again
                         this.backingMusicXml = this.referenceMusicXml;
                         this.backingFormat = this.refFormat;
-                        const musicXml = new MusicXmlPlayer(this);
+                        const musicXml = new SharedPlayer(this);
                         musicXml.setMusicXml(this.backingMusicXml);
                         this.player = musicXml;
                         this.loopStart = 0;
@@ -228,24 +229,25 @@ export class PlaySession implements IPlayer {
 
             switch(backingExtension)
             {
-                case "mid":
-                case "midi":
-                {
-                    this.backingMidi = await this.loadMidi(backingUrl);
-                    this.backingFormat = MusicFormat.Midi;
-                    const midi = new MidiPlayer(this);
-                    midi.setMidi(this.backingMidi);
-                    this.player = midi;
-                    this.loopStart = 0;
-                    this.loopEnd = midi.getMaxTime();
-                }
-                    break;
+                // dropped midi as a format
+                // case "mid":
+                // case "midi":
+                // {
+                //     this.backingMidi = await this.loadMidi(backingUrl);
+                //     this.backingFormat = MusicFormat.Midi;
+                //     const midi = new SharedPlayer(this);
+                //     midi.setMidi(this.backingMidi);
+                //     this.player = midi;
+                //     this.loopStart = 0;
+                //     this.loopEnd = midi.getMaxTime();
+                // }
+                //     break;
 
                 case "musicxml":
                 {
                     this.backingMusicXml = await this.loadMusicXmlScore(backingUrl);
                     this.backingFormat = MusicFormat.MusicXml;
-                    const musicXml = new MusicXmlPlayer(this);
+                    const musicXml = new SharedPlayer(this);
                     musicXml.setMusicXml(this.backingMusicXml);
                     this.player = musicXml;
                     this.loopStart = 0;
@@ -257,7 +259,7 @@ export class PlaySession implements IPlayer {
                 {
                     this.backingMusicXml = await this.loadMxlScore(backingUrl);
                     this.backingFormat = MusicFormat.MusicXml;
-                    const musicXml = new MusicXmlPlayer(this);
+                    const musicXml = new SharedPlayer(this);
                     musicXml.setMusicXml(this.backingMusicXml);
                     this.player = musicXml;
                     this.loopStart = 0;
@@ -369,10 +371,10 @@ export class PlaySession implements IPlayer {
         return this.backingFormat;
     }
 
-    getReferenceMidi(): Midi {
-        if (!this.referenceMidi) throw new Error("MIDI not loaded yet");
-        return this.referenceMidi;
-    }
+    // getReferenceMidi(): Midi {
+    //     if (!this.referenceMidi) throw new Error("MIDI not loaded yet");
+    //     return this.referenceMidi;
+    // }
 
     getReferenceScore() : ScoreModel {
         if(!this.referenceMusicXml) throw new Error("MusicXML not loaded yet");
@@ -384,14 +386,14 @@ export class PlaySession implements IPlayer {
     }
 
     isMidi(): boolean {
-        return this.player instanceof MidiPlayer || this.player instanceof MusicXmlPlayer;
+        return this.player instanceof SharedPlayer;
     }
 
 
     // so we can visualize it
-    getBackingMidi(): Midi | null {
-        return this.backingMidi;
-    }
+    // getBackingMidi(): Midi | null {
+    //     return this.backingMidi;
+    // }
 
     // so we can visualize it
     getBackingAudio() : AudioBuffer | null {
