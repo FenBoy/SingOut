@@ -1,6 +1,4 @@
 import * as Tone from "tone";
-import type {Midi} from "@tonejs/midi";
-import * as MidiUtils from "../midi/midiUtils";
 import type {Note, ScoreModel} from "./Types";
 import {type IPlayer, PlaySession} from "./PlaySession";
 
@@ -15,22 +13,16 @@ export class SharedPlayer implements IPlayer{
     notes: Note[] = [];
     maxTime: number = 0;
 
+    // looping
+    private loopStart : number = 0;
+    private loopEnd: number = 0;
+
     constructor(session: PlaySession) {
         this.session = session;
         // parameters can be given to the synth
         this.synth = new Tone.PolySynth(Tone.Synth);
         this.synth.toDestination();
     }
-
-    // no longer support midi
-    // setMidi(midi: Midi) {
-    //     this.notes = MidiUtils.mergeTies(MidiUtils.flattenToMidiNotes(midi));
-    //     const latestNote = this.notes.reduce(
-    //         (a, b) => (a.start > b.start ? a : b)
-    //     );
-    //
-    //     this.maxTime = latestNote.start + latestNote.duration;
-    // }
 
     setMusicXml(model: ScoreModel) {
         this.notes = model.notes
@@ -54,11 +46,37 @@ export class SharedPlayer implements IPlayer{
             if (end > max) max = end;
         }
         this.maxTime = max;
+
+        // play everything unless otherwise directed
+        this.setLoopStart(0);
+        this.setLoopEnd(this.maxTime);
     }
 
+    //
+    setMaxTime(time: number) {
+        this.maxTime = time;
+    }
 
     getMaxTime(): number {
         return this.maxTime;
+    }
+
+    getLoopStart() : number
+    {
+        return this.loopStart;
+    }
+
+    setLoopStart(time: number): void {
+        this.loopStart = time;
+    }
+
+    getLoopEnd() : number
+    {
+        return this.loopEnd;
+    }
+
+    setLoopEnd(time: number): void {
+        this.loopEnd = time;
     }
 
     getIsPlaying():boolean{
@@ -74,7 +92,10 @@ export class SharedPlayer implements IPlayer{
         const tick = () => {
             const now = this.session.getCurrentTime();
 
-            if (now > this.maxTime) {
+            if(now < this.loopStart) return;
+
+            if (now > this.maxTime || now > this.loopEnd) {
+                this.session.playComplete();
                 this.isPlaying = false;
                 this.session.pause();
                 return;

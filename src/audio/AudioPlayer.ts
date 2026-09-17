@@ -11,6 +11,10 @@ export class AudioPlayer implements IPlayer{
     private isPlaying:boolean = false;
     private maxTime : number = 0;
 
+    // looping
+    private loopStart : number = 0;
+    private loopEnd: number = 0;
+
     constructor(session: PlaySession) {
         this.session = session;
     }
@@ -20,6 +24,24 @@ export class AudioPlayer implements IPlayer{
         this.audioBuffer = buffer;
         this.startTime = 0;
         this.maxTime = buffer.duration;
+    }
+
+    getLoopStart() : number
+    {
+        return this.loopStart;
+    }
+
+    setLoopStart(time: number): void {
+        this.loopStart = time;
+    }
+
+    getLoopEnd() : number
+    {
+        return this.loopEnd;
+    }
+
+    setLoopEnd(time: number): void {
+        this.loopEnd = time;
     }
 
     getIsPlaying():boolean{
@@ -66,6 +88,10 @@ export class AudioPlayer implements IPlayer{
             this.source?.stop();
             this.play();
         }
+    }
+
+    setMaxTime(time: number) {
+        this.maxTime = time;
     }
 
     getMaxTime():number

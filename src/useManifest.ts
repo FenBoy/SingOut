@@ -19,7 +19,24 @@ export function useManifest() {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        fetch('https://raw.githubusercontent.com/FenBoy/GlobalVoices/main/manifest.json?${Date.now()}')
+
+        //?manifest=https://raw.githubusercontent.com/FenBoy/GlobalVoices/main/manifest.json
+
+        let url:string = 'https://raw.githubusercontent.com/FenBoy/GlobalVoices/main/manifest.json';
+        const params = new URLSearchParams(window.location.search);
+        const manifestUrl = params.get("manifest");
+        if(manifestUrl != null)
+        {
+            url = manifestUrl;
+        }
+
+        const stamp = `?${Date.now()}`;
+
+        if (!url.endsWith(stamp)) {
+            url = url + stamp;
+        }
+
+        fetch(url)
             .then(res => {
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 return res.json();

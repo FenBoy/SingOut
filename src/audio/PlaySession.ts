@@ -1,4 +1,3 @@
-import { Midi } from "@tonejs/midi";
 import type { Track, Part } from '../useManifest';
 import {AudioPlayer} from "./AudioPlayer";
 import {Clock} from "./Clock";
@@ -14,54 +13,46 @@ export interface IPlayer {
     play(): void;
     pause(): void;
     seek(time: number): void;
+    setMaxTime(time: number): void;
     getMaxTime(): number;
     getIsPlaying(): boolean;
+    setLoopStart(time: number): void;
+    setLoopEnd(time: number): void;
+    getLoopEnd(): number;
+    getLoopStart(): number;
 }
 
 export enum MusicFormat {
     None = "none",
-    Midi = "midi",
     MusicXml = "musicxml",
     Audio = "audio"
 }
 
-
-export class PlaySession implements IPlayer {
-    private pitch: number = 0;
-    private latency: number = 0;
-
-    private refFormat:MusicFormat = MusicFormat.None;
-    // private referenceMidi: Midi | null = null; deprecated
-    private referenceMusicXml : ScoreModel | null = null;
-
-    // stored here for visualisation
-    private backingFormat: MusicFormat = MusicFormat.None;
-    // private backingMidi: Midi | null = null; deprecated
-    private backingAudio: AudioBuffer | null = null;
-    private backingMusicXml : ScoreModel | null = null;
-
-    private part: Part;
-    private player :IPlayer | null = null;
-    private clock : Clock;
-
+export class Results
+{
     // scores
-    private goldScore: number = 0;
-    private silverScore: number = 0;
-    private bronzeScore: number = 0;
-    private penaltyScore: number = 0;
+    goldScore: number = 0;
+    silverScore: number = 0;
+    bronzeScore: number = 0;
+    penaltyScore: number = 0;
 
-    // microphone
-    private mic: Mic;
-    private isMicOn: boolean = false;
+    resetScore()
+    {
+        this.goldScore = 0;
+        this.silverScore = 0;
+        this.bronzeScore = 0;
+        this.penaltyScore = 0;
+        this.shown = false;
+    }
 
-    // looping
-    private loopStart : number = 0;
-    private loopEnd: number = 0;
+    shown: boolean = false;
 
-    constructor(track: Track, part: Part) {
-        this.part = part;
-        this.clock = new Clock();
-        this.mic = new Mic();
+    markShown() {
+        this.shown = true;
+    }
+
+    hasBeenShown() {
+        return this.shown;
     }
 
     getTotalScore() {
@@ -75,7 +66,7 @@ export class PlaySession implements IPlayer {
 
     addGold()
     {
-      this.goldScore++;
+        this.goldScore++;
     }
 
     getSilverScore() {
@@ -104,6 +95,46 @@ export class PlaySession implements IPlayer {
     {
         this.penaltyScore++;
     }
+}
+
+export class PlaySession implements IPlayer {
+    private pitch: number = 0;
+    private latency: number = 0;
+
+    private refFormat:MusicFormat = MusicFormat.None;
+    // private referenceMidi: Midi | null = null; deprecated
+    private referenceMusicXml : ScoreModel | null = null;
+
+    // stored here for visualisation
+    private backingFormat: MusicFormat = MusicFormat.None;
+    // private backingMidi: Midi | null = null; deprecated
+    private backingAudio: AudioBuffer | null = null;
+    private backingMusicXml : ScoreModel | null = null;
+
+    private part: Part;
+    private player :IPlayer | null = null;
+    private clock : Clock;
+
+    private results:Results;
+
+    // microphone
+    private mic: Mic;
+    private isMicOn: boolean = false;
+
+    // looping
+    private loopStart : number = 0;
+    private loopEnd: number = 0;
+
+    constructor(track: Track, part: Part) {
+        this.part = part;
+        this.clock = new Clock();
+        this.mic = new Mic();
+        this.results = new Results();
+    }
+
+    getResults(): Results {
+        return this.results;
+    }
 
     async setMicState(isRecording: boolean): Promise<void> {
         this.isMicOn = isRecording;
@@ -121,18 +152,21 @@ export class PlaySession implements IPlayer {
         }
     }
 
-    resetScore()
-    {
-        this.goldScore = 0;
-        this.silverScore = 0;
-        this.bronzeScore = 0;
-        this.penaltyScore = 0;
-    }
-
     private getExtension(path: string): string {
         const idx = path.lastIndexOf(".");
         if (idx === -1) return "";
         return path.substring(idx + 1).toLowerCase();
+    }
+
+    getMeasureBoundaries(): { measure: number; time: number }[] {
+        if (!this.referenceMusicXml) return [];
+
+        return this.referenceMusicXml.measures
+            .filter(m => m.partIndex === 0)   // only top part defines measure boundaries
+            .map(m => ({
+                measure: m.index,
+                time: m.startTime
+            }));
     }
 
     async load() {
@@ -182,21 +216,6 @@ export class PlaySession implements IPlayer {
         {
             switch(referenceExtension)
             {
-                // dropped midi as a format
-                // case "mid":
-                // case "midi": {
-                //     if(this.referenceMidi!= null) {
-                //         // don't load it again
-                //         this.backingMidi = this.referenceMidi;
-                //         this.backingFormat = this.refFormat;
-                //         const midi = new SharedPlayer(this);
-                //         midi.setMidi(this.backingMidi);
-                //         this.player = midi;
-                //         this.loopStart = 0;
-                //         this.loopEnd = midi.getMaxTime();
-                //     }
-                // }
-                // break;
                 case "musicxml":
                 case "mxl":
                 {
@@ -229,20 +248,6 @@ export class PlaySession implements IPlayer {
 
             switch(backingExtension)
             {
-                // dropped midi as a format
-                // case "mid":
-                // case "midi":
-                // {
-                //     this.backingMidi = await this.loadMidi(backingUrl);
-                //     this.backingFormat = MusicFormat.Midi;
-                //     const midi = new SharedPlayer(this);
-                //     midi.setMidi(this.backingMidi);
-                //     this.player = midi;
-                //     this.loopStart = 0;
-                //     this.loopEnd = midi.getMaxTime();
-                // }
-                //     break;
-
                 case "musicxml":
                 {
                     this.backingMusicXml = await this.loadMusicXmlScore(backingUrl);
@@ -300,6 +305,11 @@ export class PlaySession implements IPlayer {
         {
             this.setCurrentTime(this.loopStart);
         }
+
+        if(this.player != null)
+        {
+            this.player.setLoopStart(time);
+        }
     }
 
     getLoopEnd() : number
@@ -313,6 +323,11 @@ export class PlaySession implements IPlayer {
         if(this.loopEnd > this.getCurrentTime())
         {
             this.setCurrentTime(this.loopEnd);
+        }
+
+        if(this.player != null)
+        {
+            this.player.setLoopEnd(time);
         }
     }
 
@@ -353,12 +368,6 @@ export class PlaySession implements IPlayer {
             return this.part.part;
         }
         return -1;
-    }
-
-    async loadMidi(url: string): Promise<Midi> {
-        const res = await fetch(url);
-        const arrayBuffer = await res.arrayBuffer();
-        return new Midi(arrayBuffer);
     }
 
     getReferenceFormat() : MusicFormat
@@ -418,8 +427,25 @@ export class PlaySession implements IPlayer {
         return false;
     }
 
+    getIsFinished()
+    {
+        if(this.player != null)
+        {
+            return this.clock.getTime() >= this.getMaxTime();
+        }
+
+        // can't finish play without a player
+        return false;
+    }
+
     setCurrentTime(time: number) {
         this.clock.setTime(time);
+    }
+
+    setMaxTime(time: number) {
+        if(this.player != null) {
+            this.player.setMaxTime(time);
+        }
     }
 
     getMaxTime()
@@ -451,6 +477,11 @@ export class PlaySession implements IPlayer {
         return this.pitch;
     }
 
+    getIsMicOn():boolean
+    {
+        return this.isMicOn;
+    }
+
     getMicVolume() {
         return this.mic.getVolume();
     }
@@ -459,8 +490,11 @@ export class PlaySession implements IPlayer {
 
     play()
     {
+        // switch on microphone and receive events
+        this.setMicState(true);
+
         this.clock.start();
-        this.resetScore();
+        this.results.resetScore();
         if(this.player) this.player.play();
         // if(this.isRecording) this.mic.startRecording();
     }

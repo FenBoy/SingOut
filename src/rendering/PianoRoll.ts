@@ -37,22 +37,6 @@ export class PianoRoll {
 
     tempo = 0;
 
-    heldBlocks: {
-        midi: number;           // sung MIDI
-        expectedMidi: number | null;
-        start: number;
-        end: number;
-        centsSamples: number[];
-    }[] = [];
-
-    currentHeld: {
-        midi: number;
-        expectedMidi: number | null;
-        start: number;
-        centsSamples: number[];
-    } | null = null;
-
-
     isLooping = false;
     playHeadPos = 2;
 
@@ -78,8 +62,6 @@ export class PianoRoll {
     };
 
     MISS_COLOR = "rgb(255 0 0)";
-
-    MISS_ACTIVE_COLOR = "#ff4444";
 
     STANDARD_NOTE : string = "#1d1dc1";
 
@@ -138,26 +120,6 @@ export class PianoRoll {
         });
     }
 
-    private snapToDiatonic(midi: number): number {
-        const pc = Math.round(midi) % 12;
-
-        // Find nearest diatonic pitch class
-        let bestPc = this.scalePcs[0];
-        let bestDist = Math.abs(pc - bestPc);
-
-        for (const dpc of this.scalePcs) {
-            const dist = Math.abs(pc - dpc);
-            if (dist < bestDist) {
-                bestDist = dist;
-                bestPc = dpc;
-            }
-        }
-
-        // Replace pitch class, keep octave
-        const octave = Math.floor(midi / 12);
-        return octave * 12 + bestPc;
-    }
-
     private handleClick(e: MouseEvent) {
         const rect = this.canvas.getBoundingClientRect();
         const x = e.clientX - rect.left + this.scrollX;
@@ -187,8 +149,6 @@ export class PianoRoll {
 
         // --- 2. No note clicked → play nearest diatonic pitch ---
         const chromaticMidi = this.yToMidi(y);
-        // const snappedMidi = this.snapToDiatonic(chromaticMidi);
-
         playMidi(chromaticMidi);
     }
 
@@ -218,15 +178,6 @@ export class PianoRoll {
         // Redraw
         this.render();
     }
-
-
-    // setMidi(midi: Midi,part:number) {
-    //     // this.notes = MidiUtils.mergeTies(MidiUtils.extractNotesAndLyrics(midi,part));
-    //     this.notes = MidiUtils.extractNotesAndLyrics(midi,part);
-    //     this.calculateRange();
-    //     this.maxScrollX = this.highestTime * this.xScale - this.canvas.width;
-    //     if (this.maxScrollX < 0) this.maxScrollX = 0;
-    // }
 
     setScore(model: ScoreModel, selectedPartIndex: number) {
         this.model = model;
@@ -310,43 +261,6 @@ export class PianoRoll {
         return null;
     }
 
-    // this might be useful
-    /*
-    private detectVibrato() {
-        const hist = this.liveCentsHistory;
-        if (hist.length < 10) {
-            this.vibratoActive = false;
-            this.vibratoAmount = 0;
-            return;
-        }
-
-        // 1. Compute amplitude (peak-to-peak)
-        const min = Math.min(...hist);
-        const max = Math.max(...hist);
-        const amplitude = (max - min) / 2; // ± amplitude
-
-        // 2. Compute "wiggliness" (zero-crossings)
-        let zeroCrossings = 0;
-        for (let i = 1; i < hist.length; i++) {
-            if ((hist[i - 1] < 0 && hist[i] > 0) ||
-                (hist[i - 1] > 0 && hist[i] < 0)) {
-                zeroCrossings++;
-            }
-        }
-
-        // zeroCrossings per 200ms → frequency in Hz
-        const freq = zeroCrossings * 2.5; // approx
-
-        // Vibrato conditions
-        const isVibrato =
-            freq >= 4 && freq <= 7 &&      // vibrato frequency
-            amplitude >= 10 && amplitude <= 60; // amplitude
-
-        this.vibratoActive = isVibrato;
-        this.vibratoAmount = amplitude;
-    }
-    */
-
     private drawLanes() {
         const ctx = this.ctx;
 
@@ -368,7 +282,6 @@ export class PianoRoll {
             ctx.fillRect(0, yTop, this.canvas.width, yBottom - yTop);
         }
     }
-
 
     // maybe do this once
     private computeMeasureBoundaries(): { measure: number, start: number }[] {
@@ -577,50 +490,6 @@ export class PianoRoll {
         }
     }
 
-
-    private drawExpectedOld() {
-        const ctx = this.ctx;
-        const t = this.session.getCurrentTime();
-
-        for (const n of this.notes) {
-            if (n.start >= (t - this.headOffset)) {
-                const yTop = this.midiToY(n.midi + 1);
-                const yBottom = this.midiToY(n.midi);
-
-                const baseH = yBottom - yTop;
-                const scaledH = baseH * this.noteScale;
-
-// center the scaled note inside the band
-
-                const y = yTop - (scaledH - baseH) / 2;
-                const h = scaledH;
-
-                const x = (n.start - (t - this.headOffset)) * this.xScale - this.scrollX;
-                const w = n.duration * this.xScale;
-
-                const isActive = t >= n.start && t < n.start + n.duration;
-
-                ctx.fillStyle = isActive ? "#ff4444" : "#3b82f6";
-                ctx.shadowBlur = isActive ? 12 : 0;
-
-                ctx.strokeStyle = "#1e40af";
-                ctx.lineWidth = 2;
-
-                this.roundRect(ctx, x, y, w, h, 6);
-                ctx.fill();
-                ctx.stroke();
-
-                if (n.lyric) {
-                    ctx.fillStyle = "white";
-                    ctx.font = `${8 * this.noteScale}px sans-serif`;
-                    ctx.textBaseline = "middle";
-                    ctx.fillText(n.lyric, x + 4, y + h / 2);
-                }
-
-            }
-        }
-    }
-
     drawPlayHead() {
         const ctx = this.ctx;
         const x = this.headOffset * this.xScale;
@@ -635,36 +504,13 @@ export class PianoRoll {
         ctx.stroke();
     }
 
-    /*
-    updatePitchBlocks() {
-        const pitch = this.session.getPitch();
-
-        if (!this.isValidPitch(pitch)) return;
-
-        // we need to compensate for latency
-        // so we subtract the latency from the time
-        // to get the correct midi note
-        const sampleTime = this.session.getCurrentTime();
-
-        const correctedTime = this.session.getCorrectedTime();
-
-        console.log("current: " + sampleTime + "corrected: " + correctedTime);
-
-        this.pitchBlocks.push({
-            time: correctedTime,
-            pitch: pitch,
-            n:this.getMidiAt(correctedTime),
-        });
-    }
-    */
-
     updateScore() {
         const pitch = this.session.getPitch();
         if (pitch <= 0) return;
 
         const midiNote: Note | null = this.getCurrentMidi();
         if (!midiNote) {
-            this.session.addPenalty();
+            this.session.getResults().addPenalty();
             return;
         }
 
@@ -680,127 +526,18 @@ export class PianoRoll {
             const absCents = Math.abs(cents);
 
             if (absCents < 10) {
-                this.session.addGold();
+                this.session.getResults().addGold();
             }
             else if (absCents < 25) {
-                this.session.addSilver();
+                this.session.getResults().addSilver();
             }
             else {
-                this.session.addBronze();
+                this.session.getResults().addBronze();
             }
         }
     }
 
-    // get the location of the pitch marker, relative to a given note
-    getMidiY(pitch: number, targetMidi: number): number {
-        const targetFreq = MidiUtils.midiToFreq(targetMidi);
-        const cents = 1200 * Math.log2(pitch / targetFreq);
 
-        const yTop = this.midiToY(targetMidi + 1);
-        const yBottom = this.midiToY(targetMidi);
-        const semitoneHeight = yBottom - yTop;
-
-        const centsOffset = (cents / 100) * semitoneHeight;
-
-        return yBottom - centsOffset;   // center of pitch inside the band
-    }
-
-    /*
-    drawHeldBlocks() {
-        const ctx = this.ctx;
-        const now = this.session.getCurrentTime();
-        const w = this.canvas.width;
-
-        type PB = { time: number; pitch: number; n: Note | null };
-
-        let currentMidi: number | null = null;
-        let currentExpected: number | null = null;
-        let firstBlock: PB | null = null;
-        let lastBlock: PB | null = null;
-        let centsSum = 0;
-        let centsCount = 0;
-
-        const flushSegment = () => {
-            if (!firstBlock || !lastBlock || currentMidi === null) return;
-
-            // scrolling: same model as drawPitchBlocks
-            const ageStart = now - firstBlock.time;
-            const ageEnd = now - lastBlock.time;
-
-            const xStart = (this.headOffset * this.xScale) - (ageStart * this.xScale);
-            const xEnd = (this.headOffset * this.xScale) - (ageEnd * this.xScale);
-            const width = xEnd - xStart;
-
-            if (xEnd < -20 || xStart > w) return;
-
-            const avgCents = centsCount > 0 ? centsSum / centsCount : 0;
-
-            const midiForHeight = currentExpected ?? currentMidi;
-            const centerY = this.getMidiY(
-                MidiUtils.midiToFreq(midiForHeight),
-                midiForHeight
-            );
-            const topY = centerY - (this.pitchHeight / 2);
-            const h = this.pitchHeight;
-
-            let color;
-
-            if (currentExpected === null) {
-                // singing when they shouldn't
-                color = "rgb(255 0 0)";
-            } else {
-                // normal tuning colours
-                if (avgCents < 10) color = "rgb(255 230 0)";
-                else if (avgCents < 25) color = "rgb(255 230 0)";
-                else if (avgCents < 50) color = "rgb(163 145 74)";
-                else color = "rgb(255 150 0)";
-            }
-
-            ctx.fillStyle = color;
-            ctx.fillRect(xStart, topY, width, h);
-        };
-
-        for (const block of this.pitchBlocks) {
-            const sungMidi = MidiUtils.freqToMidi(block.pitch);
-            const expectedMidi = block.n?.midi ?? null;
-
-            const targetMidi = expectedMidi ?? sungMidi;
-            const targetFreq = MidiUtils.midiToFreq(targetMidi);
-            const cents = 1200 * Math.log2(block.pitch / targetFreq);
-
-            if (currentMidi === null) {
-                // start first segment
-                currentMidi = sungMidi;
-                currentExpected = expectedMidi;
-                firstBlock = block;
-                lastBlock = block;
-                centsSum = Math.abs(cents);
-                centsCount = 1;
-                continue;
-            }
-
-            // if either sung MIDI or expected MIDI changes → new segment
-            if (sungMidi !== currentMidi || expectedMidi !== currentExpected) {
-                flushSegment();
-
-                currentMidi = sungMidi;
-                currentExpected = expectedMidi;
-                firstBlock = block;
-                lastBlock = block;
-                centsSum = Math.abs(cents);
-                centsCount = 1;
-            } else {
-                // extend current segment
-                lastBlock = block;
-                centsSum += Math.abs(cents);
-                centsCount++;
-            }
-        }
-
-        // flush final segment
-        flushSegment();
-    }
-*/
     isValidPitch(pitch:number): boolean
     {
         if (pitch == 0) return false;
@@ -957,19 +694,6 @@ export class PianoRoll {
             }
         }
     }
-
-finalizeHeldBlocks() {
-    if (this.currentHeld) {
-        this.heldBlocks.push({
-            midi: this.currentHeld.midi,
-            expectedMidi: this.currentHeld.expectedMidi,
-            start: this.currentHeld.start,
-            end: this.session.getCurrentTime(),
-            centsSamples: this.currentHeld.centsSamples
-        });
-        this.currentHeld = null;
-    }
-}
 
     render() {
         const ctx = this.ctx;

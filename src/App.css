@@ -216,5 +216,30 @@
   border-right-color: var(--border);
 }
 
+.results-popup {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.results-popup.hidden {
+  display: none;
+}
+
+.results-content {
+  background: #1e293b;
+  color: white;
+  padding: 24px;
+  border-radius: 12px;
+  width: 320px;
+  text-align: center;
+  box-shadow: 0 0 20px rgba(0,0,0,0.4);
+}
+
+
 
 

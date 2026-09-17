@@ -55,11 +55,11 @@ export function MicControlBar({ session, onOpenSettings } : MicControlBarProps) 
             <button
                 onClick={(e) => {
                     e.stopPropagation();     // ⭐ prevents opening settings
-                    session.setMicState(!session.isMicOn);
+                    session.setMicState(!session.getIsMicOn());
                 }}
                 style={{
                     padding: "8px 14px",
-                    background: session.isMicOn ? "#e33" : "#b30000",
+                    background: session.getIsMicOn() ? "#e33" : "#b30000",
                     color: "white",
                     border: "none",
                     borderRadius: "6px",
@@ -67,7 +67,7 @@ export function MicControlBar({ session, onOpenSettings } : MicControlBarProps) 
                     fontSize: "14px"
                 }}
             >
-                ● {session.isMicOn ? "Recording…" : "Record"}
+                ● {session.getIsMicOn() ? "Recording…" : "Record"}
             </button>
         </div>
     );

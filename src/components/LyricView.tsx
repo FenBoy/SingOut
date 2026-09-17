@@ -1,36 +1,29 @@
 import { useEffect, useRef } from "react";
-import { LyricPanel } from "../rendering/LyricPanel";
+// import { LyricPanel } from "../rendering/LyricPanel";
+import {AutoCue} from "../rendering/AutoCue";
 import {MusicFormat, type PlaySession} from "../audio/PlaySession";
 
 export function LyricView({ session }: { session: PlaySession }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const lyricRef = useRef<LyricPanel | null>(null);
+    const autoRef = useRef<AutoCue | null>(null);
 
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const lp = new LyricPanel(canvas, session);
-        lyricRef.current = lp;
+        const auto = new AutoCue(canvas, session);
+        autoRef.current = auto;
 
         const format:MusicFormat = session.getBackingFormat()
 
         switch(format) {
             case MusicFormat.None:
                 break;
-            case MusicFormat.Midi:
-            {
-                const midi = session.getBackingMidi();
-                if(midi != null) {
-                    lp.setMidi(session.getReferenceMidi(), session.getPart());
-                }
-            }
-                break;
             case MusicFormat.MusicXml:
             {
                 const score = session.getBackingScore();
                 if(score != null) {
-                    lp.setScore(score,session.getPart());
+                    auto.setScore(score,session.getPart());
                 }
             }
                 break;
@@ -38,12 +31,12 @@ export function LyricView({ session }: { session: PlaySession }) {
                 break;
         }
 
-        lp.resize();
+        auto.resize();
 
         let raf: number;
 
         function draw() {
-            lp.render();
+            auto.render();
             raf = requestAnimationFrame(draw);
         }
 
@@ -55,7 +48,7 @@ export function LyricView({ session }: { session: PlaySession }) {
 
     useEffect(() => {
         function handleResize() {
-            lyricRef.current?.resize();
+            autoRef.current?.resize();
         }
         window.addEventListener("resize", handleResize);
         return () => window.removeEventListener("resize", handleResize);
