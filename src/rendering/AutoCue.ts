@@ -1,10 +1,12 @@
-import type { PlaySession } from "../audio/PlaySession";
+import type {IPlayer, PlaySession} from "../audio/PlaySession";
 import type {ScoreModel} from "../audio/Types";
 
-export class AutoCue {
+export class AutoCue implements IPlayer{
     private canvas: HTMLCanvasElement;
     private ctx: CanvasRenderingContext2D;
     private session: PlaySession;
+    private didSeek: boolean = false;
+    private isPlaying : boolean = false;
 
     private lines: {
         words: { text: string; start: number; end: number }[];
@@ -18,7 +20,7 @@ export class AutoCue {
     constructor(canvas: HTMLCanvasElement, session: PlaySession) {
         this.canvas = canvas;
         this.session = session;
-
+        this.session.setVisualiser(this);
         const ctx = canvas.getContext("2d");
         if (!ctx) throw new Error("Canvas 2D context unavailable");
         this.ctx = ctx;
@@ -86,6 +88,43 @@ export class AutoCue {
         return this.lines.length - 1;
     }
 
+    play() {
+        this.isPlaying = true;
+    }
+
+    pause() {
+        this.isPlaying = false;
+    }
+
+    getIsPlaying() : boolean
+    {
+        return this.isPlaying;
+    }
+
+    seek(time: number) {
+        // Find the active line at the new time
+        const activeLineIndex = this.getActiveLineIndex(time);
+
+        // Compute the exact scroll position for that line
+        const h = this.canvas.height;
+        const targetY = activeLineIndex * this.lineHeight - h / 2;
+
+        // Snap instantly (no easing)
+        this.scrollY = targetY;
+
+        // Clamp so last line stays visible
+        const maxScroll = this.lines.length * this.lineHeight - h;
+        if (this.scrollY < 0) this.scrollY = 0;
+        if (this.scrollY > maxScroll) this.scrollY = maxScroll;
+
+        this.didSeek = true;
+
+        console.log("Seek Time:" + time);
+
+        // Redraw immediately
+        this.render();
+    }
+
     draw() {
         const ctx = this.ctx;
         const w = this.canvas.width;
@@ -94,12 +133,24 @@ export class AutoCue {
         ctx.clearRect(0, 0, w, h);
 
         const t = this.session.getCurrentTime();
+
+        console.log("Draw Time:" + t);
+
         const activeLineIndex = this.getActiveLineIndex(t);
         const activeLine = this.lines[activeLineIndex];
 
         // Smooth scroll toward centered active line
         const targetY = activeLineIndex * this.lineHeight - h / 2;
-        this.scrollY += (targetY - this.scrollY) * 0.12;
+
+        if (this.didSeek || !this.session.getIsPlaying()) {
+            // ⭐ snap instantly
+            this.scrollY = targetY;
+            this.didSeek = false;
+        } else {
+            // smooth scroll only during playback
+            this.scrollY += (targetY - this.scrollY) * 0.12;
+        }
+
 
         // Clamp scroll so last line stays visible
         const maxScroll = this.lines.length * this.lineHeight - h;

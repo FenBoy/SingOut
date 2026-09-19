@@ -102,7 +102,7 @@ export function PlayScreen({ track, part, onBack }: {
                 </button>
 
                 <h2>{track.title}</h2>
-                <h2>Part: {part.name}</h2>
+                <h2>{part.name}</h2>
 
                 {/* ⭐ Play/Pause Button */}
                 <button

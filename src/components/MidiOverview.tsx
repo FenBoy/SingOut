@@ -19,15 +19,6 @@ export function MidiOverview({ session }: { session:PlaySession }) {
         switch(format) {
             case MusicFormat.None:
                 break;
-            case MusicFormat.Midi:
-                {
-                    const midi = session.getBackingMidi();
-                    if(midi != null) {
-                        // show all parts
-                        overview.setMidi(midi,-1);
-                    }
-                }
-                break;
             case MusicFormat.MusicXml:
                 {
                     const score = session.getBackingScore();

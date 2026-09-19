@@ -19,14 +19,6 @@ export function MidiViewer({ session }: { session:PlaySession }) {
         switch(format) {
             case MusicFormat.None:
                 break;
-            case MusicFormat.Midi:
-            {
-                const midi = session.getReferenceMidi();
-                if(midi != null) {
-                    pr.setMidi(midi,session.getPart());
-                }
-            }
-                break;
             case MusicFormat.MusicXml:
             {
                 const score = session.getReferenceScore();

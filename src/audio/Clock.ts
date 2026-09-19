@@ -1,45 +1,54 @@
+// replaced with PlayHead
+
+/*
+type ClockState = "notStarted" | "ticking" | "paused";
+
 export class Clock {
-    private startTime = 0;
-    private pausedAt = 0;
-    private playing = false;
-    speed = 1.0; // playback speed multiplier
+    private startTime:number = 0;
+    private stoppedTime:number = 0;
+    private state:ClockState = "notStarted";
 
     start() {
-        if (!this.playing) {
-            this.startTime = performance.now() - this.pausedAt;
-            this.playing = true;
+        switch(this.state) {
+            case "notStarted":
+                this.startTime = performance.now() - 0;
+                this.state = "ticking";
+                break;
+                case "ticking":
+                    break;
+                    case "paused":
+                        this.startTime = performance.now() - this.stoppedTime;
+                        break;
         }
     }
 
-    pause() {
-        if (this.playing) {
-            this.pausedAt = this.getTime();
-            this.playing = false;
-        }
+    pause()
+    {
+        this.state = "paused";
+        this.stoppedTime = performance.now() - this.startTime;
     }
 
-    stop() {
-        this.playing = false;
-        this.pausedAt = 0;
+    stop()
+    {
+        this.state = "notStarted";
+        this.stoppedTime = performance.now() - this.startTime;
     }
 
-    /** Global time in seconds, scaled by speed */
+    seek(time:number)
+    {
+        this.startTime = performance.now() - time;
+    }
+
     getTime(): number {
-        if (!this.playing) return this.pausedAt;
-        const elapsedMs = performance.now() - this.startTime;
-        return (elapsedMs / 1000) * this.speed;
-    }
-
-    setTime(time: number) {
-        this.startTime = time;
-    }
 
 
-    /** Jump to a specific time */
-    seek(seconds: number) {
-        this.pausedAt = seconds;
-        if (this.playing) {
-            this.startTime = performance.now() - seconds * 1000;
+        if(this.isTicking)
+        {
+            const elapsedMs = performance.now() - this.startTime;
+            return (elapsedMs / 1000);
         }
+        return this.stoppedTime;
     }
 }
+
+*/

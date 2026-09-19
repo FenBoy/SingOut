@@ -1,24 +1,23 @@
 import * as Tone from "tone";
 import type {Note, ScoreModel} from "./Types";
 import {type IPlayer, PlaySession} from "./PlaySession";
+import type {PlayHead} from "./PlayHead";
 
 // plays midi or music xml
 
 export class SharedPlayer implements IPlayer{
     private synth: Tone.PolySynth;
     session: PlaySession;
+    playHead: PlayHead;
     private timer: ReturnType<typeof setTimeout> | null = null;
     private isPlaying : boolean = false;
 
     notes: Note[] = [];
-    maxTime: number = 0;
+    private noteIndex: number = 0;
 
-    // looping
-    private loopStart : number = 0;
-    private loopEnd: number = 0;
-
-    constructor(session: PlaySession) {
+    constructor(session: PlaySession, playHead : PlayHead) {
         this.session = session;
+        this.playHead = playHead;
         // parameters can be given to the synth
         this.synth = new Tone.PolySynth(Tone.Synth);
         this.synth.toDestination();
@@ -39,44 +38,6 @@ export class SharedPlayer implements IPlayer{
         this.notes.sort((a, b) => a.start - b.start);
 
         // console.log("PARTS FOUND:", new Set(this.notes.map(n => n.partIndex)));
-
-        let max = 0;
-        for (const n of this.notes) {
-            const end = n.start + n.duration;
-            if (end > max) max = end;
-        }
-        this.maxTime = max;
-
-        // play everything unless otherwise directed
-        this.setLoopStart(0);
-        this.setLoopEnd(this.maxTime);
-    }
-
-    //
-    setMaxTime(time: number) {
-        this.maxTime = time;
-    }
-
-    getMaxTime(): number {
-        return this.maxTime;
-    }
-
-    getLoopStart() : number
-    {
-        return this.loopStart;
-    }
-
-    setLoopStart(time: number): void {
-        this.loopStart = time;
-    }
-
-    getLoopEnd() : number
-    {
-        return this.loopEnd;
-    }
-
-    setLoopEnd(time: number): void {
-        this.loopEnd = time;
     }
 
     getIsPlaying():boolean{
@@ -87,14 +48,16 @@ export class SharedPlayer implements IPlayer{
         this.clearTimer();
         this.isPlaying = true;
 
-        let index = 0;
-
         const tick = () => {
-            const now = this.session.getCurrentTime();
 
-            if(now < this.loopStart) return;
+            // stop ticking when the play has stopped
+            if(!this.isPlaying) return;
 
-            if (now > this.maxTime || now > this.loopEnd) {
+            const now = this.playHead.getCurrentTime();
+
+            if(now < this.playHead.getLoopStart()) return;
+
+            if (now > this.playHead.getMaxTime() || now > this.playHead.getLoopEnd()) {
                 this.session.playComplete();
                 this.isPlaying = false;
                 this.session.pause();
@@ -102,8 +65,8 @@ export class SharedPlayer implements IPlayer{
             }
 
             // Trigger notes in order
-            while (index < this.notes.length && this.notes[index].start <= now) {
-                const n = this.notes[index];
+            while (this.noteIndex < this.notes.length && this.notes[this.noteIndex].start <= now) {
+                const n = this.notes[this.noteIndex];
 
                 // console.log(
                 //     "FIRE:",
@@ -121,7 +84,7 @@ export class SharedPlayer implements IPlayer{
                     n.velocity
                 );
 
-                index++;
+                this.noteIndex++;
             }
 
             this.timer = setTimeout(tick, 10);
@@ -130,11 +93,16 @@ export class SharedPlayer implements IPlayer{
         tick();
     }
 
+    seek(time: number) {
+        const idx = this.notes.findIndex(n => n.start >= time);
+        this.noteIndex = idx === -1 ? this.notes.length : idx;
 
-    seek()
-    {
-
+        // If playing, restart the tick loop
+        if (this.isPlaying) {
+            this.play();
+        }
     }
+
 
     clearTimer()
     {

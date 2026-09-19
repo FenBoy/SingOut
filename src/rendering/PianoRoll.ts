@@ -37,12 +37,24 @@ export class PianoRoll {
 
     tempo = 0;
 
-    isLooping = false;
-    playHeadPos = 2;
+    // adding a loop
+    loopCancelHitBox = { x: 0, y: 0, w: 32, h: 32 };
+    longPressDelay = 300; // ms
+    pressTimer: number | null = null;
+
+    loopSelecting = false;
+    loopStartTime = 0;
+    loopEndTime = 0;
+
+    hasDragged = false;
+
 
     scrollX: number = 0;   // in pixels
+    wasPlaying: boolean = false;
     maxScrollX: number = 0;
     dragging = false;
+    private dragStartTime = 0;
+    private dragStartScrollX = 0;
 
     highestTime: number = 0;
     headOffset: number = 2;
@@ -88,27 +100,56 @@ export class PianoRoll {
             }
         });
 
-        // Drag-to-scroll
-        let lastX = 0;
-
         this.canvas.addEventListener("mousedown", (e) => {
+
+            // cancel loop
+            const hit = this.loopCancelHitBox;
+            if (
+                e.clientX >= hit.x &&
+                e.clientX <= hit.x + hit.w &&
+                e.clientY >= hit.y &&
+                e.clientY <= hit.y + hit.h
+            ) {
+                // cancel loop
+                this.session.setLoopStart(0);
+                this.session.setLoopEnd(this.session.getMaxTime());
+                this.render();
+                return; // prevent scrubbing
+            }
+
             this.dragging = true;
-            lastX = e.clientX;
+
+            // Freeze the clock
+            this.wasPlaying = this.session.getIsPlaying();
+            this.session.pause();
+
+            // Capture stable references
+            this.dragStartTime = this.session.getCurrentTime();
+            this.dragStartScrollX = e.clientX;
         });
 
+// mousemove
         this.canvas.addEventListener("mousemove", (e) => {
             if (!this.dragging) return;
 
-            const dx = e.clientX - lastX;
-            lastX = e.clientX;
-
-            this.scrollX -= dx; // feels natural
-            this.clampScroll();
+            // dx is the number of pixels
+            const dx = (this.dragStartScrollX - e.clientX);
+            // converted to seconds
+            const deltaSeconds = dx / (this.xScale);
+            const targetTime:number = this.dragStartTime + deltaSeconds;
+            this.session.seek(targetTime);
             this.render();
         });
 
+// mouseup
         this.canvas.addEventListener("mouseup", () => {
+            if (!this.dragging) return;
             this.dragging = false;
+
+            if(this.wasPlaying)
+            {
+                this.session.play();
+            }
         });
 
         this.canvas.addEventListener("mouseleave", () => {
@@ -695,10 +736,61 @@ export class PianoRoll {
         }
     }
 
+    drawLoopRegion() {
+        const ctx = this.ctx;
+        const loopStart:number = this.session.getLoopStart();
+        const loopEnd:number = this.session.getLoopEnd();
+        const maxTime:number = this.session.getMaxTime();
+        const currentTime:number = this.session.getCurrentTime();
+
+        // if loop is whole song, don't do anything
+        if (loopStart == 0 && loopEnd == maxTime) return;
+
+        // convert seconds → pixels using your model
+        const startX = (loopStart - (currentTime - this.headOffset)) * this.xScale - this.scrollX;
+        const endX   = (loopEnd   - (currentTime - this.headOffset)) * this.xScale - this.scrollX;
+
+        const x1 = Math.min(startX, endX);
+        const x2 = Math.max(startX, endX);
+
+        const regionWidth = x2 - x1;
+        const regionHeight = this.canvas.height; // full piano roll height
+
+        // shaded background
+        ctx.fillStyle = "rgba(0, 150, 255, 0.15)";
+        ctx.fillRect(x1, 0, regionWidth, regionHeight);
+
+        // top bar
+        ctx.fillStyle = "rgba(0, 150, 255, 0.35)";
+        ctx.fillRect(x1, 0, regionWidth, 32);
+
+        // loop icon (top-left)
+        ctx.fillStyle = "rgba(0, 150, 255, 0.9)";
+        ctx.font = "20px sans-serif";
+        ctx.fillText("🔁", x1 + 6, 24);
+
+        // cancel button (top-right)
+        const cancelX = x2 - 32;
+        const cancelY = 0;
+
+        ctx.fillStyle = "rgba(255, 80, 80, 0.9)";
+        ctx.font = "20px sans-serif";
+        ctx.fillText("✖", cancelX + 6, cancelY + 24);
+
+        // update hit-box for touch/mouse
+        this.loopCancelHitBox = {
+            x: cancelX,
+            y: cancelY,
+            w: 32,
+            h: 32
+        };
+    }
+
     render() {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.drawLanes();
+        this.drawLoopRegion();
         this.drawExpected();
         this.drawPlayHead();
         if(this.session.getIsPlaying()) {

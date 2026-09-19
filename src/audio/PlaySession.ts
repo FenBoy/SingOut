@@ -1,8 +1,8 @@
 import type { Track, Part } from '../useManifest';
 import {AudioPlayer} from "./AudioPlayer";
-import {Clock} from "./Clock";
+import {PlayHead} from "./PlayHead";
 import { Mic } from "./Mic";
-import {parseMusicXml} from "./ParseMusicXml";
+import {getLength, parseMusicXml} from "./ParseMusicXml";
 import type {ScoreModel} from "./Types";
 import {SharedPlayer} from "./SharedPlayer";
 import JSZip from "jszip";
@@ -13,13 +13,7 @@ export interface IPlayer {
     play(): void;
     pause(): void;
     seek(time: number): void;
-    setMaxTime(time: number): void;
-    getMaxTime(): number;
     getIsPlaying(): boolean;
-    setLoopStart(time: number): void;
-    setLoopEnd(time: number): void;
-    getLoopEnd(): number;
-    getLoopStart(): number;
 }
 
 export enum MusicFormat {
@@ -97,7 +91,7 @@ export class Results
     }
 }
 
-export class PlaySession implements IPlayer {
+export class PlaySession {
     private pitch: number = 0;
     private latency: number = 0;
 
@@ -113,7 +107,8 @@ export class PlaySession implements IPlayer {
 
     private part: Part;
     private player :IPlayer | null = null;
-    private clock : Clock;
+    private visualiser : IPlayer | null = null;
+    private playHead : PlayHead;
 
     private results:Results;
 
@@ -121,13 +116,9 @@ export class PlaySession implements IPlayer {
     private mic: Mic;
     private isMicOn: boolean = false;
 
-    // looping
-    private loopStart : number = 0;
-    private loopEnd: number = 0;
-
     constructor(track: Track, part: Part) {
         this.part = part;
-        this.clock = new Clock();
+        this.playHead = new PlayHead();
         this.mic = new Mic();
         this.results = new Results();
     }
@@ -150,6 +141,10 @@ export class PlaySession implements IPlayer {
         {
             this.mic.stop();
         }
+    }
+
+    setVisualiser(vis: IPlayer): void {
+        this.visualiser = vis;
     }
 
     private getExtension(path: string): string {
@@ -191,12 +186,20 @@ export class PlaySession implements IPlayer {
             {
                 this.referenceMusicXml = await this.loadMusicXmlScore(referenceUrl);
                 this.refFormat = MusicFormat.MusicXml;
+                const maxTime : number  = getLength(this.referenceMusicXml)
+                this.playHead.setMaxTime(maxTime);
+                this.playHead.setLoopStart(0);
+                this.playHead.setLoopEnd(maxTime);
             }
             break;
             case "mxl":
             {
                 this.referenceMusicXml = await this.loadMxlScore(referenceUrl);
                 this.refFormat = MusicFormat.MusicXml;
+                const maxTime : number  = getLength(this.referenceMusicXml)
+                this.playHead.setMaxTime(maxTime);
+                this.playHead.setLoopStart(0);
+                this.playHead.setLoopEnd(maxTime);
             }
             break;
             default:
@@ -224,11 +227,9 @@ export class PlaySession implements IPlayer {
                         // don't load it again
                         this.backingMusicXml = this.referenceMusicXml;
                         this.backingFormat = this.refFormat;
-                        const musicXml = new SharedPlayer(this);
+                        const musicXml = new SharedPlayer(this, this.playHead);
                         musicXml.setMusicXml(this.backingMusicXml);
                         this.player = musicXml;
-                        this.loopStart = 0;
-                        this.loopEnd = musicXml.getMaxTime();
                     }
 
                     // add code here
@@ -252,11 +253,9 @@ export class PlaySession implements IPlayer {
                 {
                     this.backingMusicXml = await this.loadMusicXmlScore(backingUrl);
                     this.backingFormat = MusicFormat.MusicXml;
-                    const musicXml = new SharedPlayer(this);
+                    const musicXml = new SharedPlayer(this,this.playHead);
                     musicXml.setMusicXml(this.backingMusicXml);
                     this.player = musicXml;
-                    this.loopStart = 0;
-                    this.loopEnd = musicXml.getMaxTime();
                 }
                 break;
 
@@ -264,11 +263,9 @@ export class PlaySession implements IPlayer {
                 {
                     this.backingMusicXml = await this.loadMxlScore(backingUrl);
                     this.backingFormat = MusicFormat.MusicXml;
-                    const musicXml = new SharedPlayer(this);
+                    const musicXml = new SharedPlayer(this, this.playHead);
                     musicXml.setMusicXml(this.backingMusicXml);
                     this.player = musicXml;
-                    this.loopStart = 0;
-                    this.loopEnd = musicXml.getMaxTime();
                 }
                 break;
 
@@ -283,8 +280,6 @@ export class PlaySession implements IPlayer {
                     const audio = new AudioPlayer(this);
                     audio.setAudio(this.backingAudio);
                     this.player = audio;
-                    this.loopStart = 0;
-                    this.loopEnd = audio.getMaxTime();
                 }
                     break;
                 default:
@@ -295,40 +290,20 @@ export class PlaySession implements IPlayer {
 
     getLoopStart() : number
     {
-        return this.loopStart;
+        return this.playHead.getLoopStart();
     }
 
     setLoopStart(time: number): void {
-        this.loopStart = time;
-
-        if(this.loopStart > this.getCurrentTime())
-        {
-            this.setCurrentTime(this.loopStart);
-        }
-
-        if(this.player != null)
-        {
-            this.player.setLoopStart(time);
-        }
+        this.playHead.setLoopStart(time);
     }
 
     getLoopEnd() : number
     {
-        return this.loopEnd;
+        return this.playHead.getLoopEnd();
     }
 
     setLoopEnd(time: number): void {
-        this.loopEnd = time;
-
-        if(this.loopEnd > this.getCurrentTime())
-        {
-            this.setCurrentTime(this.loopEnd);
-        }
-
-        if(this.player != null)
-        {
-            this.player.setLoopEnd(time);
-        }
+        this.playHead.setLoopEnd(time);
     }
 
     async loadMxlScore(url:string):Promise<ScoreModel> {
@@ -431,31 +406,20 @@ export class PlaySession implements IPlayer {
     {
         if(this.player != null)
         {
-            return this.clock.getTime() >= this.getMaxTime();
+            return this.playHead.getCurrentTime() >= this.getMaxTime();
         }
 
         // can't finish play without a player
         return false;
     }
 
-    setCurrentTime(time: number) {
-        this.clock.setTime(time);
-    }
-
-    setMaxTime(time: number) {
-        if(this.player != null) {
-            this.player.setMaxTime(time);
-        }
-    }
-
     getMaxTime()
     {
-        if(this.player) return this.player.getMaxTime();
-        return 0;
+        return this.playHead.getMaxTime();
     }
 
     getCurrentTime(): number {
-        return this.clock.getTime();
+        return this.playHead.getCurrentTime();
     }
 
     // The microphone response will be later
@@ -493,28 +457,48 @@ export class PlaySession implements IPlayer {
         // switch on microphone and receive events
         this.setMicState(true);
 
-        this.clock.start();
-        this.results.resetScore();
-        if(this.player) this.player.play();
-        // if(this.isRecording) this.mic.startRecording();
+        if(this.player)
+        {
+            this.player.play();
+        }
+
+        this.playHead.start();
+        //this.results.resetScore();
     }
 
     pause()
     {
-        this.clock.pause();
+        this.playHead.stop();
         if(this.player) this.player.pause();
-        // if(this.isRecording) this.mic.stopRecording();
     }
 
     seek(time: number)
     {
-        this.clock.seek(time);
+        if(time < 0)
+        {
+            this.playHead.seek(0);
+            if(this.player) this.player.seek(0);
+            if(this.visualiser) this.visualiser.seek(0);
+            return;
+        }
+
+        const maxTime = this.playHead.getMaxTime();
+        if(time > maxTime)
+        {
+            this.playHead.seek(maxTime);
+            if(this.player) this.player.seek(maxTime);
+            if(this.visualiser) this.visualiser.seek(maxTime);
+            return;
+        }
+
+        this.playHead.seek(time);
         if(this.player) this.player.seek(time);
+        if(this.visualiser) this.visualiser.seek(time);
     }
 
     // called from the player
     playComplete()
     {
-        this.clock.pause();
+
     }
 }

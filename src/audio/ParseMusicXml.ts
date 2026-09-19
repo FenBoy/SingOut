@@ -5,7 +5,7 @@ import type {
     TempoChange,
     TimeSignature,
     XmlNote,
-    XmlLyric
+    XmlLyric, Note
 } from "./Types";
 
 export function parseMusicXml(xml: Document): ScoreModel {
@@ -355,4 +355,25 @@ function computeTiming(score: ScoreModel) {
     }
 }
 
+// get the length of the score
+export function getLength(model:ScoreModel) {
+    const notes = model.notes
+        .map(n => ({
+            midi: n.pitch,
+            start: n.startTime,
+            duration: n.duration,
+            measureIndex: n.measureIndex,
+            velocity: 0.8,
+            partIndex: n.partIndex,
+            lyric: n.lyric ?? null
+        }) satisfies Note);
 
+    notes.sort((a, b) => a.start - b.start);
+
+    let max = 0;
+    for (const n of notes) {
+        const end = n.start + n.duration;
+        if (end > max) max = end;
+    }
+    return max;
+}
