@@ -11,6 +11,7 @@ export class SharedPlayer implements IPlayer{
     playHead: PlayHead;
     private timer: ReturnType<typeof setTimeout> | null = null;
     private isPlaying : boolean = false;
+    private lastTime: number = 0;
 
     notes: Note[] = [];
     private noteIndex: number = 0;
@@ -44,6 +45,24 @@ export class SharedPlayer implements IPlayer{
         return this.isPlaying;
     }
 
+    private recalcNoteIndex(now: number) {
+        // binary search is best, but linear is fine for small note counts
+        let lo = 0;
+        let hi = this.notes.length - 1;
+
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (this.notes[mid].start < now) {
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+
+        this.noteIndex = lo;
+    }
+
+
     play() {
         this.clearTimer();
         this.isPlaying = true;
@@ -54,6 +73,15 @@ export class SharedPlayer implements IPlayer{
             if(!this.isPlaying) return;
 
             const now = this.playHead.getCurrentTime();
+
+            // If the time goes backwards, we will have to
+            // deal with it
+            if(now < this.lastTime)
+            {
+                this.recalcNoteIndex(now);
+            }
+
+            this.lastTime = now;
 
             if(now < this.playHead.getLoopStart()) return;
 

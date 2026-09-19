@@ -2,8 +2,10 @@ import { useEffect, useState, useRef } from "react";
 import {PlaySession, Results} from "../audio/PlaySession";
 import { MidiViewer } from "../components/MidiViewer";
 import { LyricView} from "../components/LyricView";
+import {LoopViewer} from "../components/LoopViewer";
 import type { Track, Part } from "../useManifest";
 import {SettingsScreen} from "./SettingsScreen";
+
 
 export function PlayScreen({ track, part, onBack }: {
     track: Track;
@@ -152,6 +154,17 @@ export function PlayScreen({ track, part, onBack }: {
                     minHeight: 0,
                     gap: "12px"
                 }}>
+
+                    <div style={{
+                        flex: 0.2,
+                        minHeight: 0,
+                        padding: "10px 15px",
+                        background: "#f0f4ff",
+                        borderRadius: "8px",
+                        border: "1px solid #d0d8f0"
+                    }}>
+                        <LoopViewer session={session}/>
+                    </div>
 
 
                     {/* ⭐ Bigger piano roll */}

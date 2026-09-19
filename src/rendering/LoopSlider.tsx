@@ -6,18 +6,40 @@ interface LoopSliderProps {
     end: number;
     disabled: boolean;
     onChange: (range: { start: number; end: number }) => void;
+    minSize?: number; // optional minimum loop length
 }
 
-
-export function LoopSlider({ maxTime, start, end, disabled, onChange }: LoopSliderProps) {
+export function LoopSlider({ maxTime, start, end, disabled, onChange, minSize = 0 }: LoopSliderProps) {
     const barRef = useRef<HTMLDivElement>(null);
 
-    const drag = (update: (t: number) => void) => (e: MouseEvent) => {
+    const getTimeFromEvent = (clientX: number) => {
         const rect = barRef.current!.getBoundingClientRect();
-        const x = e.clientX - rect.left;
+        const x = clientX - rect.left;
         const ratio = Math.min(Math.max(x / rect.width, 0), 1);
-        const time = ratio * maxTime;
+        return ratio * maxTime;
+    };
+
+    const startDrag = (update: (t: number) => void) => (e: MouseEvent | TouchEvent) => {
+        if (disabled) return;
+
+        const clientX = e instanceof MouseEvent ? e.clientX : e.touches[0].clientX;
+        const time = getTimeFromEvent(clientX);
         update(time);
+    };
+
+    const attachDrag = (update: (t: number) => void) => {
+        const move = startDrag(update);
+        const up = () => {
+            window.removeEventListener("mousemove", move as any);
+            window.removeEventListener("mouseup", up);
+            window.removeEventListener("touchmove", move as any);
+            window.removeEventListener("touchend", up);
+        };
+
+        window.addEventListener("mousemove", move as any);
+        window.addEventListener("mouseup", up);
+        window.addEventListener("touchmove", move as any);
+        window.addEventListener("touchend", up);
     };
 
     return (
@@ -31,7 +53,6 @@ export function LoopSlider({ maxTime, start, end, disabled, onChange }: LoopSlid
                 pointerEvents: disabled ? "none" : "auto",
                 margin: "20px 0"
             }}
-
         >
             {/* Filled region */}
             <div
@@ -46,18 +67,18 @@ export function LoopSlider({ maxTime, start, end, disabled, onChange }: LoopSlid
 
             {/* Start handle */}
             <div
-                onMouseDown={() => {
-
-                    if (disabled) return;
-
-                    const move = drag((t) => onChange({ start: t, end }));
-                    const up = () => {
-                        window.removeEventListener("mousemove", move);
-                        window.removeEventListener("mouseup", up);
-                    };
-                    window.addEventListener("mousemove", move);
-                    window.addEventListener("mouseup", up);
-                }}
+                onMouseDown={() =>
+                    attachDrag((t) => {
+                        const newStart = Math.min(t, end - minSize);
+                        onChange({ start: newStart, end });
+                    })
+                }
+                onTouchStart={() =>
+                    attachDrag((t) => {
+                        const newStart = Math.min(t, end - minSize);
+                        onChange({ start: newStart, end });
+                    })
+                }
                 style={{
                     position: "absolute",
                     left: `${(start / maxTime) * 100}%`,
@@ -71,16 +92,18 @@ export function LoopSlider({ maxTime, start, end, disabled, onChange }: LoopSlid
 
             {/* End handle */}
             <div
-                onMouseDown={() => {
-                    if (disabled) return;
-                    const move = drag((t) => onChange({ start, end: t }));
-                    const up = () => {
-                        window.removeEventListener("mousemove", move);
-                        window.removeEventListener("mouseup", up);
-                    };
-                    window.addEventListener("mousemove", move);
-                    window.addEventListener("mouseup", up);
-                }}
+                onMouseDown={() =>
+                    attachDrag((t) => {
+                        const newEnd = Math.max(t, start + minSize);
+                        onChange({ start, end: newEnd });
+                    })
+                }
+                onTouchStart={() =>
+                    attachDrag((t) => {
+                        const newEnd = Math.max(t, start + minSize);
+                        onChange({ start, end: newEnd });
+                    })
+                }
                 style={{
                     position: "absolute",
                     left: `${(end / maxTime) * 100}%`,
@@ -94,6 +117,7 @@ export function LoopSlider({ maxTime, start, end, disabled, onChange }: LoopSlid
         </div>
     );
 }
+
 
 
 

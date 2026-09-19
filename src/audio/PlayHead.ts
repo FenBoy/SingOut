@@ -1,4 +1,4 @@
-type PlayHeadState = "running" | "stopped";
+type PlayHeadState = "running" | "stopped" | "looped";
 
 export class PlayHead
 {
@@ -10,7 +10,7 @@ export class PlayHead
     // looping
     private loopStart : number = 0;
     private loopEnd: number = 0;
-    maxTime: number = 0;
+    private maxTime: number = 0;
 
     getLoopStart() : number
     {
@@ -75,11 +75,35 @@ export class PlayHead
         this.deltaMs = 0;
     }
 
-    getCurrentTime():number
+    getCurrentTime(): number
     {
         switch(this.state) {
             case "running": {
                 this.deltaMs = performance.now() - this.originMs;
+
+                const time:number = this.startPosSecs + (this.deltaMs * 0.001);
+
+                if(this.loopStart != 0 && this.loopEnd != this.maxTime)
+                {
+                    // if either loop marker is set, loop
+                    if(time >= this.loopEnd)
+                    {
+                        // how many milliseconds we are past it
+                        const overrun : number = time - this.loopEnd;
+                        this.originMs = performance.now() - overrun;
+                        this.deltaMs = 0;
+                        this.startPosSecs = this.loopStart;
+                    }
+                }
+                else
+                {
+                    // no loop → detect finish
+                    if (time >= this.maxTime)
+                    {
+                        this.startPosSecs = this.maxTime;
+                        this.state = "stopped";
+                    }
+                }
             }
             break;
             default:

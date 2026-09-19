@@ -37,18 +37,6 @@ export class PianoRoll {
 
     tempo = 0;
 
-    // adding a loop
-    loopCancelHitBox = { x: 0, y: 0, w: 32, h: 32 };
-    longPressDelay = 300; // ms
-    pressTimer: number | null = null;
-
-    loopSelecting = false;
-    loopStartTime = 0;
-    loopEndTime = 0;
-
-    hasDragged = false;
-
-
     scrollX: number = 0;   // in pixels
     wasPlaying: boolean = false;
     maxScrollX: number = 0;
@@ -101,22 +89,6 @@ export class PianoRoll {
         });
 
         this.canvas.addEventListener("mousedown", (e) => {
-
-            // cancel loop
-            const hit = this.loopCancelHitBox;
-            if (
-                e.clientX >= hit.x &&
-                e.clientX <= hit.x + hit.w &&
-                e.clientY >= hit.y &&
-                e.clientY <= hit.y + hit.h
-            ) {
-                // cancel loop
-                this.session.setLoopStart(0);
-                this.session.setLoopEnd(this.session.getMaxTime());
-                this.render();
-                return; // prevent scrubbing
-            }
-
             this.dragging = true;
 
             // Freeze the clock
@@ -759,31 +731,6 @@ export class PianoRoll {
         // shaded background
         ctx.fillStyle = "rgba(0, 150, 255, 0.15)";
         ctx.fillRect(x1, 0, regionWidth, regionHeight);
-
-        // top bar
-        ctx.fillStyle = "rgba(0, 150, 255, 0.35)";
-        ctx.fillRect(x1, 0, regionWidth, 32);
-
-        // loop icon (top-left)
-        ctx.fillStyle = "rgba(0, 150, 255, 0.9)";
-        ctx.font = "20px sans-serif";
-        ctx.fillText("🔁", x1 + 6, 24);
-
-        // cancel button (top-right)
-        const cancelX = x2 - 32;
-        const cancelY = 0;
-
-        ctx.fillStyle = "rgba(255, 80, 80, 0.9)";
-        ctx.font = "20px sans-serif";
-        ctx.fillText("✖", cancelX + 6, cancelY + 24);
-
-        // update hit-box for touch/mouse
-        this.loopCancelHitBox = {
-            x: cancelX,
-            y: cancelY,
-            w: 32,
-            h: 32
-        };
     }
 
     render() {
@@ -794,13 +741,10 @@ export class PianoRoll {
         this.drawExpected();
         this.drawPlayHead();
         if(this.session.getIsPlaying()) {
-            //this.finalizeHeldBlocks();
-            //this.updatePitchBlocks();
             this.updateScore();
-            //this.drawHeldBlocks();
         }
-        this.drawBars();
+        // this.drawBars(); // moved to looper
         this.drawPitch();
-        this.drawTime();
+        //this.drawTime(); // moved to looper
     }
 }

@@ -134,8 +134,6 @@ export class AutoCue implements IPlayer{
 
         const t = this.session.getCurrentTime();
 
-        console.log("Draw Time:" + t);
-
         const activeLineIndex = this.getActiveLineIndex(t);
         const activeLine = this.lines[activeLineIndex];
 

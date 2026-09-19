@@ -402,17 +402,6 @@ export class PlaySession {
         return false;
     }
 
-    getIsFinished()
-    {
-        if(this.player != null)
-        {
-            return this.playHead.getCurrentTime() >= this.getMaxTime();
-        }
-
-        // can't finish play without a player
-        return false;
-    }
-
     getMaxTime()
     {
         return this.playHead.getMaxTime();
@@ -429,9 +418,9 @@ export class PlaySession {
     // (by singing/tapping)
     // or making an estimate
 
-    getCorrectedTime() : number{
-        return this.getCurrentTime() - this.latency;
-    }
+    // getCorrectedTime() : number{
+    //     return this.getCurrentTime() - this.latency;
+    // }
 
     setLatency(time: number) {
         this.latency = time;
@@ -456,6 +445,13 @@ export class PlaySession {
     {
         // switch on microphone and receive events
         this.setMicState(true);
+
+        const current =this.playHead.getCurrentTime();
+
+        if(current < this.playHead.getLoopStart() || current > this.playHead.getLoopEnd())
+        {
+            this.seek(this.playHead.getLoopStart());
+        }
 
         if(this.player)
         {
