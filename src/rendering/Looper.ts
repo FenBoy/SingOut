@@ -1,15 +1,12 @@
-import type {Note, ScoreModel} from "../audio/Types";
-import * as MidiUtils from "../midi/midiUtils";
-import { playMidi } from "../audio/NotePlayer";
 import {PlaySession} from "../audio/PlaySession";
-import * as MxmlUtils from "../midi/musicXmlUtils"
+import {type PlaybackEvent} from "../fastXml/playback";
 
 export class Looper {
     canvas: HTMLCanvasElement;
     ctx: CanvasRenderingContext2D;
     session: PlaySession;
 
-    xScale:number = 100;
+    xScaleUnit:number = 100;
     scrollX: number = 0;   // in pixels
     dragging = false;
     maxScrollX: number = 0;
@@ -19,10 +16,7 @@ export class Looper {
     highestTime: number = 0;
     headOffset: number = 2;
 
-    model : ScoreModel | null = null;
-
-    notes: Note[] = [];
-    private measureBoundaries: { measure: number; start: number }[] = [];
+    playbackEvents: PlaybackEvent[] = [];
 
     loopSelecting = false;
     loopSelectStartTime = 0;
@@ -35,7 +29,7 @@ export class Looper {
 
     private pixelToTime(clientX: number): number {
         const currentTime = this.session.getCurrentTime();
-        return (clientX + this.scrollX) / this.xScale + (currentTime - this.headOffset);
+        return (clientX + this.scrollX) / this.getScale() + (currentTime - this.headOffset);
     }
 
     constructor(canvas: HTMLCanvasElement, session: PlaySession) {
@@ -45,6 +39,8 @@ export class Looper {
         if (!ctx) throw new Error("Canvas 2D context unavailable");
         this.ctx = ctx;
         this.attachScrollHandlers();
+        this.session.onChange(() => this.populateNotes());
+        // this.session.onScale(()=> this.render());
     }
 
     private attachScrollHandlers() {
@@ -129,7 +125,7 @@ export class Looper {
 
             // --- Normal scrubbing (unchanged) ---
             const dx = (this.dragStartScrollX - e.clientX);
-            const deltaSeconds = dx / this.xScale;
+            const deltaSeconds = dx / this.getScale();
             const targetTime = this.dragStartTime + deltaSeconds;
 
             this.session.seek(targetTime);
@@ -162,7 +158,7 @@ export class Looper {
     private updateScrollLimits() {
         this.maxScrollX = Math.max(
             0,
-            this.highestTime * this.xScale - this.canvas.width
+            this.highestTime * this.getScale() - this.canvas.width
         );
         this.clampScroll();
     }
@@ -174,7 +170,7 @@ export class Looper {
         const maxTime = this.session.getMaxTime();
 
         // convert pixel speed → seconds
-        const deltaSeconds = this.autoSeekPixelSpeed / this.xScale;
+        const deltaSeconds = this.autoSeekPixelSpeed / this.getScale();
 
         let newTime = current;
 
@@ -195,38 +191,20 @@ export class Looper {
         }
     }
 
-    setScore(model: ScoreModel, selectedPartIndex: number) {
-        this.model = model;
-        this.notes = model.notes
-            .filter(n => selectedPartIndex === -1 || n.partIndex === selectedPartIndex)
-            .map(n => ({
-                midi: n.pitch,
-                start: n.startTime,
-                duration: n.duration,
-                measureIndex: n.measureIndex,
-                velocity: 0.8,
-                partIndex: n.partIndex,
-                lyric: n.lyric ?? null
-            }) satisfies Note);
-
-        this.calculateRange();
-        this.measureBoundaries = this.computeMeasureBoundaries();
-
-        this.maxScrollX = this.highestTime * this.xScale - this.canvas.width;
-        if (this.maxScrollX < 0) this.maxScrollX = 0;
+    private getScale()
+    {
+        return this.xScaleUnit * this.session.getZoomFactor();
     }
 
-    private computeMeasureBoundaries(): { measure: number, start: number }[] {
-        if(this.model) {
-            return this.model.measures
-                .filter(m => m.partIndex === 0)
-                .sort((a, b) => a.index - b.index)
-                .map(m => ({
-                    measure: m.index,
-                    start: m.startTime
-                }));
-        }
-        return [];
+    populateNotes()
+    {
+        this.playbackEvents = this.session.getSelectedPlaybackEvents();
+
+        this.calculateRange();
+        // this.measureBoundaries = computeMeasureBoundaries(musicXml,this.session.getTimeScale());
+
+        this.maxScrollX = this.highestTime * this.getScale() - this.canvas.width;
+        if (this.maxScrollX < 0) this.maxScrollX = 0;
     }
 
     resize() {
@@ -244,49 +222,12 @@ export class Looper {
     }
 
     calculateRange() {
-        const notes = this.notes;
-        if (notes.length === 0) return;
-        this.highestTime = Math.max(...this.notes.map(n => n.start + n.duration));
-        this.maxScrollX = Math.max(0, this.highestTime * this.xScale - this.canvas.width);
+        this.maxScrollX = Math.max(0, this.session.getMaxTime() * this.getScale() - this.canvas.width);
     }
 
     private clampScroll() {
         if (this.scrollX < 0) this.scrollX = 0;
         if (this.scrollX > this.maxScrollX) this.scrollX = this.maxScrollX;
-    }
-
-    private drawBars() {
-        const ctx = this.ctx;
-        const width = this.canvas.width;
-        const height = this.canvas.height;
-
-        const t = this.session.getCurrentTime();
-        const xScale = this.xScale;
-        const scrollX = this.scrollX;
-        const headOffset = this.headOffset;
-
-        for (const m of this.measureBoundaries) {
-
-            // EXACT SAME coordinate math as drawTime()
-            const x = (m.start - (t - headOffset)) * xScale - scrollX;
-
-            // Skip bars outside viewport
-            if (x < 0 || x > width) continue;
-
-            // Draw vertical bar line
-            ctx.strokeStyle = "#999";
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, height);
-            ctx.stroke();
-
-            // Draw measure number
-            ctx.fillStyle = "#555";
-            ctx.font = "12px sans-serif";
-            ctx.textBaseline = "top";
-            ctx.fillText(`${m.measure + 1}`, x + 4, 4);
-        }
     }
 
     formatTime(sec: number): string {
@@ -306,7 +247,7 @@ export class Looper {
         const height = this.canvas.height;
 
         const t = this.session.getCurrentTime();
-        const xScale = this.xScale;
+        const xScale = this.getScale();
         const scrollX = this.scrollX;
         const headOffset = this.headOffset;
 
@@ -315,7 +256,7 @@ export class Looper {
         const visibleEndSec = (t - headOffset) + (scrollX + width) / xScale;
 
         const startSec = Math.floor(visibleStartSec);
-        const endSec = Math.ceil(visibleEndSec);
+        const endSec = Math.ceil(Math.min(visibleEndSec, this.session.getMaxTime()));
 
         for (let sec = startSec; sec <= endSec; sec++) {
 
@@ -358,9 +299,53 @@ export class Looper {
         }
     }
 
+    private drawBarline(x: number, measureNumber: number) {
+        const ctx = this.ctx;
+        const height = this.canvas.height;
+
+        // Vertical bar line
+        ctx.strokeStyle = "#999";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+
+        // Measure number label
+        ctx.fillStyle = "#555";
+        ctx.font = "12px sans-serif";
+        ctx.textBaseline = "top";
+        ctx.fillText(`M${measureNumber}`, x + 4, 4);
+    }
+
+    private drawBeatTick(x: number) {
+        const ctx = this.ctx;
+
+        ctx.fillStyle = "#777";
+        ctx.fillRect(x, 0, 1, 6);   // small tick at top
+    }
+
+    private drawBarsAndBeats() {
+        const currentTime:number = this.session.getCurrentTime();
+
+        for (const ev of this.playbackEvents) {
+
+            const x = (ev.timeSeconds - (currentTime - this.headOffset)) * this.getScale() - scrollX;
+
+            if ("barline" in ev) {
+                this.drawBarline(x, ev.measureNumber);
+            }
+
+            if ("beat" in ev) {
+                this.drawBeatTick(x);
+            }
+        }
+    }
+
+
     drawPlayHead() {
         const ctx = this.ctx;
-        const x = this.headOffset * this.xScale;
+        const x = this.headOffset * this.getScale();
         const h = this.canvas.height;
 
         ctx.strokeStyle = "#ffcc00";
@@ -383,8 +368,8 @@ export class Looper {
         if (loopStart == 0 && loopEnd == maxTime) return;
 
         // convert seconds → pixels using your model
-        const startX = (loopStart - (currentTime - this.headOffset)) * this.xScale - this.scrollX;
-        const endX   = (loopEnd   - (currentTime - this.headOffset)) * this.xScale - this.scrollX;
+        const startX = (loopStart - (currentTime - this.headOffset)) * this.getScale() - this.scrollX;
+        const endX   = (loopEnd   - (currentTime - this.headOffset)) * this.getScale() - this.scrollX;
 
         const x1 = Math.min(startX, endX);
         const x2 = Math.max(startX, endX);
@@ -402,7 +387,7 @@ export class Looper {
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.drawLoopRegion();
         this.drawPlayHead();
-        this.drawBars();
+        this.drawBarsAndBeats();
         this.drawTime();
     }
 }

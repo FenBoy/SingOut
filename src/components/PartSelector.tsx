@@ -1,34 +1,46 @@
-import { List, ListItem, ListItemButton, ListItemText } from "@mui/material";
-import type { Part } from "../useManifest";
+import type { AudioChannel } from "../fastXml/channels";
+import {getPartName} from "../fastXml/helpers";
 
 export function PartSelector({
-                                 parts,
-                                 selectedPart,
-                                 onChange
+                                 channels,
+                                 selectedIndex,
+                                 onSelect
                              }: {
-    parts: Part[];
-    selectedPart: Part | null;
-    onChange: (part: Part) => void;
+    channels: AudioChannel[];
+    selectedIndex: number;
+    onSelect: (index: number) => void;
 }) {
     return (
-        <List>
-            {parts.map(p => {
-                const selected = selectedPart?.name === p.name;
-
-                return (
-                    <ListItem key={p.name} disablePadding>
-                        <ListItemButton
-                            selected={selected}
-                            onClick={() => onChange(p)}
-                        >
-                            <ListItemText primary={p.name} />
-                        </ListItemButton>
-                    </ListItem>
-                );
-            })}
-        </List>
+        <div>
+            {channels.map(ch => (
+                <div
+                    key={ch.index}
+                    onClick={() => onSelect(ch.index)}
+                    style={{
+                        padding: "10px",
+                        marginBottom: "8px",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        border: "1px solid #ccc",
+                        background:
+                            selectedIndex === ch.index
+                                ? "#d0e6ff"
+                                : "#f7f7f7"
+                    }}
+                >
+                    {getPartName(ch.part)}
+                </div>
+            ))}
+        </div>
     );
 }
+
+
+
+
+
+
+
 
 
 

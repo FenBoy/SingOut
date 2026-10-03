@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Looper } from "../rendering/Looper";
-import {MusicFormat, PlaySession} from "../audio/PlaySession";
+import {PlaySession} from "../audio/PlaySession";
 
 export function LoopViewer({ session }: { session:PlaySession }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -13,24 +13,7 @@ export function LoopViewer({ session }: { session:PlaySession }) {
         // Create renderer
         const looper = new Looper(canvas,session);
         looperRef.current = looper;
-
-        const format:MusicFormat = session.getReferenceFormat();
-
-        switch(format) {
-            case MusicFormat.None:
-                break;
-            case MusicFormat.MusicXml:
-            {
-                const score = session.getReferenceScore();
-                if(score != null) {
-                    looper.setScore(score,session.getPart());
-                }
-            }
-                break;
-            default:
-                break;
-        }
-
+        looper.populateNotes();
         looper.resize();
 
         let raf: number;

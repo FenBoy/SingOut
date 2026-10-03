@@ -19,13 +19,16 @@ export function pitchClassFromName(name: string): number {
     return map[name];
 }
 
-export function pitchClassFromFifths(fifths: number): number {
+export function pitchClassFromFifths(fifths: number | string): number {
+
+    const n = +fifths;
+
     const sharpKeys = ["C", "G", "D", "A", "E", "B", "F#", "C#"];
     const flatKeys  = ["C", "F", "Bb", "Eb", "Ab", "Db", "Gb", "Cb"];
 
-    const name = fifths >= 0
-        ? sharpKeys[fifths]
-        : flatKeys[-fifths];
+    const name = n >= 0
+        ? sharpKeys[n]
+        : flatKeys[-n];
 
     const map: Record<string, number> = {
         C: 0, "C#": 1, Db: 1,

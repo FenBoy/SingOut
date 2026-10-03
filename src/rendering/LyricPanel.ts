@@ -1,5 +1,6 @@
 import type {Note, ScoreModel} from "../audio/Types";
 import {PlaySession} from "../audio/PlaySession";
+import {scaleAndShiftNotes} from "../midi/midiUtils";
 
 export class LyricPanel {
 
@@ -17,6 +18,9 @@ export class LyricPanel {
 
     headOffset: number = 2; // show 2 seconds of lyrics before the current time
 
+    model : ScoreModel | null = null;
+    part: number = -1;
+
     notes: Note[] = [];
 
     constructor(canvas: HTMLCanvasElement, session: PlaySession) {
@@ -27,28 +31,26 @@ export class LyricPanel {
         this.ctx = ctx;
 
         this.attachScrollHandlers();
+        this.session.onChange(() => this.populateNotes());
     }
 
+    populateNotes()
+    {
+        if(!this.model) return;
 
-    setScore(model: ScoreModel, selectedPartIndex: number) {
-        this.notes = model.notes
-            .filter(n => selectedPartIndex === -1 || n.partIndex === selectedPartIndex)
-            .map(n => ({
-                midi: n.pitch,
-                start: n.startTime,
-                duration: n.duration,
-                measureIndex: n.measureIndex,
-                velocity: 0.8,
-                partIndex: n.partIndex,
-                lyric: n.lyric ?? null
-            }));
-
+        this.notes = scaleAndShiftNotes(this.model.notes,this.part,this.session.getTimeScale(), this.session.getPitchShift());
         this.calculateRange();
 
         this.maxScrollX = this.highestTime * this.xScale - this.canvas.width;
         if (this.maxScrollX < 0) this.maxScrollX = 0;
     }
 
+
+    setScore(model: ScoreModel, selectedPartIndex: number) {
+        this.model = model;
+        this.part = selectedPartIndex;
+        this.populateNotes();
+    }
 
     calculateRange() {
         const notes = this.notes;

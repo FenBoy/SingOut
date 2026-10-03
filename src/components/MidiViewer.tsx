@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { PianoRoll } from "../rendering/PianoRoll";
-import {MusicFormat, PlaySession} from "../audio/PlaySession";
+import { PlaySession} from "../audio/PlaySession";
 
 export function MidiViewer({ session }: { session:PlaySession }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -13,24 +13,7 @@ export function MidiViewer({ session }: { session:PlaySession }) {
         // Create renderer
         const pr = new PianoRoll(canvas,session);
         pianoRollRef.current = pr;
-
-        const format:MusicFormat = session.getReferenceFormat();
-
-        switch(format) {
-            case MusicFormat.None:
-                break;
-            case MusicFormat.MusicXml:
-            {
-                const score = session.getReferenceScore();
-                if(score != null) {
-                    pr.setScore(score,session.getPart());
-                }
-            }
-            break;
-            default:
-                break;
-        }
-
+        pr.populateNotes();
         pr.resize();
 
         let raf: number;

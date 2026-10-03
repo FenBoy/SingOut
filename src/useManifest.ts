@@ -1,20 +1,18 @@
 import { useEffect, useState } from 'react';
 
-export interface Part {
-    name: string;
-    reference: string;
-    backing?: string;
-    part?: number;
+export interface ManifestPart {
+    name: string;       // this will now identify the element in the MusicXml
+    backing: string;    // and a specific audio (backing tape)
 }
 
-export interface Track {
-    id: string;
+export interface ManifestTrack {
     title: string;
-    parts: Part[];
+    reference: string;  // A music XML or mxl (parts will be extracted)
+    parts?: ManifestPart[];     // for specific part tapes
 }
 
 export function useManifest() {
-    const [tracks, setTracks] = useState<Track[]>([]);
+    const [tracks, setTracks] = useState<ManifestTrack[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -42,7 +40,7 @@ export function useManifest() {
                 return res.json();
             })
             .then(data => {
-                setTracks(data.tracks as Track[]);
+                setTracks(data.tracks as ManifestTrack[]);
                 setLoading(false);
             })
             .catch(err => {

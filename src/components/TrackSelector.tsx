@@ -1,14 +1,14 @@
 import { List, ListItem, ListItemButton, ListItemIcon, Checkbox, ListItemText } from "@mui/material";
-import type { Track } from "../useManifest";
+import type { ManifestTrack } from "../useManifest";
 
 export function TrackSelector({
                                   tracks,
                                   selectedTrack,
                                   onChange
                               }: {
-    tracks: Track[];
-    selectedTrack: Track | null;
-    onChange: (track: Track) => void;
+    tracks: ManifestTrack[];
+    selectedTrack: ManifestTrack | null;
+    onChange: (track: ManifestTrack) => void;
 }) {
     return (
         <List>

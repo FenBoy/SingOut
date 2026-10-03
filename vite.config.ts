@@ -7,5 +7,5 @@ export default defineConfig({
     allowedHosts: [
       'freehand-ligament-anthology.ngrok-free.dev'
     ]
-  }
+  },
 })

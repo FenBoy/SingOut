@@ -1,15 +1,15 @@
 import { useState } from 'react';
-import { type Part, type Track, useManifest } from './useManifest';
-import { PlayScreen } from "./screens/PlayScreen";
-import { SelectScreen } from "./screens/SelectScreen";
-import { TrackSelectionScreen } from "./screens/TrackSelectionScreen";
+import {PlaySession} from "./audio/PlaySession";
+import {TrackSelectionScreen} from "./screens/TrackSelectionScreen";
+import {useManifest} from "./useManifest";
+import {SelectScreen} from "./screens/SelectScreen";
+import {PlayScreen} from "./screens/PlayScreen";
 
 export default function App() {
     const { tracks, loading, error } = useManifest();
 
     const [screen, setScreen] = useState<'track' | 'part' | 'play'>('track');
-    const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
-    const [selectedPart, setSelectedPart] = useState<Part | null>(null);
+    const [session, setSession] = useState<PlaySession | null>(null);
 
     if (loading) return <div style={{ padding: 20 }}>Loading manifest…</div>;
     if (error) return <div style={{ padding: 20 }}>Error: {error}</div>;
@@ -20,9 +20,10 @@ export default function App() {
         return (
             <TrackSelectionScreen
                 tracks={tracks}
-                onSelectTrack={(track) => {
-                    setSelectedTrack(track);
-                    setSelectedPart(null);
+                onSelectSession={async (track) => {
+                    const s = new PlaySession();
+                    await s.loadTrack(track);
+                    setSession(s);
                     setScreen('part');
                 }}
             />
@@ -30,27 +31,23 @@ export default function App() {
     }
 
     // Screen 2: Part selection
-    if (screen === 'part' && selectedTrack) {
+    if (screen === 'part' && session) {
         return (
             <SelectScreen
-                track={selectedTrack}
-                selectedPart={selectedPart}
-                onSelectPart={setSelectedPart}
+                session={session}
                 onGo={() => setScreen('play')}
             />
         );
     }
 
     // Screen 3: Play screen
-    if (screen === 'play' && selectedTrack && selectedPart) {
+    if (screen === 'play' && session) {
         return (
             <PlayScreen
-                track={selectedTrack}
-                part={selectedPart}
+                session={session}
                 onBack={() => {
                     setScreen('track');
-                    setSelectedTrack(null);
-                    setSelectedPart(null);
+                    setSession(null);
                 }}
             />
         );

@@ -1,26 +1,23 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState} from "react";
 import {PlaySession, Results} from "../audio/PlaySession";
 import { MidiViewer } from "../components/MidiViewer";
 import { LyricView} from "../components/LyricView";
 import {LoopViewer} from "../components/LoopViewer";
-import type { Track, Part } from "../useManifest";
 import {SettingsScreen} from "./SettingsScreen";
 
-
-export function PlayScreen({ track, part, onBack }: {
-    track: Track;
-    part: Part;
+export function PlayScreen({
+                               session,
+                               onBack
+                           }: {
+    session: PlaySession;
     onBack: () => void;
 }) {
-    const [session, setSession] = useState<PlaySession | null>(null);
     const [, forceUpdate] = useState(0);
     const [screen, setScreen] = useState<"play" | "settings">("play");
     const [showResults, setShowResults] = useState(false);
     const [results, setResults] = useState<Results | null>(null);
 
     function togglePlayPause() {
-        if (!session) return;
-
         if (session.getIsPlaying()) {
             session.pause();
         } else {
@@ -29,36 +26,19 @@ export function PlayScreen({ track, part, onBack }: {
     }
 
     useEffect(() => {
-        const s = new PlaySession(track, part);
-        s.load().then(() => {
-            setSession(s);
-
-            // enable the microphone as soon as possible
-            s.setMicState(true);
-        });
-    }, [track, part]);
-
-    useEffect(() => {
-        if (!session) return;
-
         const id = setInterval(() => {
             forceUpdate(x => x + 1);
 
             const r = session.getResults();
-
-            if (!r.hasBeenShown() && session.getIsFinished()) {
+            if (!r.hasBeenShown() && session.isAtEnd()) {
                 setResults(r);
                 setShowResults(true);
-                r.markShown();   // ⭐ prevents reopening
+                r.markShown();
             }
         }, 100);
 
         return () => clearInterval(id);
     }, [session]);
-
-    if (!session) {
-        return <div style={{ padding: 20 }}>Loading…</div>;
-    }
 
     if (screen === "settings") {
         return (
@@ -69,8 +49,6 @@ export function PlayScreen({ track, part, onBack }: {
         );
     }
 
-
-    // resizing
     return (
         <div style={{
             fontFamily: 'sans-serif',
@@ -103,10 +81,15 @@ export function PlayScreen({ track, part, onBack }: {
                     ← Back
                 </button>
 
-                <h2>{track.title}</h2>
-                <h2>{part.name}</h2>
+                {session.isTrackReady() ? (
+                    <>
+                        <h2>{session.getTrackTitle()}</h2>
+                        <h2>{session.getChannelTitle()}</h2>
+                    </>
+                ) : (
+                    <h2>Loading track…</h2>
+                )}
 
-                {/* ⭐ Play/Pause Button */}
                 <button
                     onClick={togglePlayPause}
                     style={{
@@ -136,10 +119,8 @@ export function PlayScreen({ track, part, onBack }: {
                 >
                     ☰
                 </button>
-
             </div>
 
-            {/* ⭐ Responsive content area */}
             <div style={{
                 display: "flex",
                 flexDirection: "column",
@@ -154,7 +135,6 @@ export function PlayScreen({ track, part, onBack }: {
                     minHeight: 0,
                     gap: "12px"
                 }}>
-
                     <div style={{
                         flex: 0.2,
                         minHeight: 0,
@@ -166,8 +146,6 @@ export function PlayScreen({ track, part, onBack }: {
                         <LoopViewer session={session}/>
                     </div>
 
-
-                    {/* ⭐ Bigger piano roll */}
                     <div style={{
                         flex: 3,
                         minHeight: 0,
@@ -179,16 +157,15 @@ export function PlayScreen({ track, part, onBack }: {
                         <MidiViewer session={session}/>
                     </div>
 
-                    {/* ⭐ Smaller lyrics */}
-                    <div style={{
-                        flex: 1,
-                        minHeight: 0,
-                        maxHeight: "22vh",
-                        paddingLeft: "40px",
-                        paddingRight: "40px"
-                    }}>
-                        <LyricView session={session}/>
-                    </div>
+                    {/*<div style={{*/}
+                    {/*    flex: 1,*/}
+                    {/*    minHeight: 0,*/}
+                    {/*    maxHeight: "22vh",*/}
+                    {/*    paddingLeft: "40px",*/}
+                    {/*    paddingRight: "40px"*/}
+                    {/*}}>*/}
+                    {/*    <LyricView session={session}/>*/}
+                    {/*</div>*/}
                 </div>
             </div>
 
@@ -220,10 +197,10 @@ export function PlayScreen({ track, part, onBack }: {
                             border: "1px solid #d0d8f0",
                             fontSize: "16px",
                             lineHeight: "22px",
-                            display: "flex",           // ⭐ make children horizontal
-                            flexDirection: "row",      // ⭐ explicit horizontal direction
-                            alignItems: "center",      // vertically center icons
-                            gap: "12px"                // spacing between items
+                            display: "flex",
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: "12px"
                         }}>
                             <div>⭐ {results.getGoldScore()}</div>
                             <div>✨ {results.getSilverScore()}</div>
@@ -249,7 +226,6 @@ export function PlayScreen({ track, part, onBack }: {
                     </div>
                 </div>
             )}
-
         </div>
     );
 }

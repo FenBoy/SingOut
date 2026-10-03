@@ -1,11 +1,19 @@
-import type { Track, Part } from '../useManifest';
+import type {ManifestTrack} from '../useManifest';
 import {AudioPlayer} from "./AudioPlayer";
 import {PlayHead} from "./PlayHead";
-import { Mic } from "./Mic";
-import {getLength, parseMusicXml} from "./ParseMusicXml";
-import type {ScoreModel} from "./Types";
-import {SharedPlayer} from "./SharedPlayer";
+import {Mic} from "./Mic";
 import JSZip from "jszip";
+import {TonePlayer} from "./TonePlayer";
+import {getPartList, getTitle, type XmlScorePartwise} from "../fastXml/helpers";
+import {
+    buildScorePlayback,
+    getPlaybackForPart,
+    getPlaybackScoreLengthSeconds,
+    getStartingTempoFromPlayback, type PlaybackEvent
+} from "../fastXml/playback";
+import { XMLParser } from "fast-xml-parser";
+import {type AudioChannel, buildScoreChannels} from "../fastXml/channels";
+import {InstrumentBank, resolveInstrumentName, SoundFontPlayer} from "./SoundFontPlayer";
 
 export const BASE_URL = "https://raw.githubusercontent.com/FenBoy/GlobalVoices/main";
 
@@ -96,16 +104,21 @@ export class PlaySession {
     private latency: number = 0;
 
     private refFormat:MusicFormat = MusicFormat.None;
-    // private referenceMidi: Midi | null = null; deprecated
-    private referenceMusicXml : ScoreModel | null = null;
+    // private referenceMusicXml : XmlScore | null = null;
+
+    // this will be the MusicXml data converted into
+    // concrete classes
+    private referenceScore: XmlScorePartwise | null = null;
+    private playbackEvents:PlaybackEvent[][] = [];
 
     // stored here for visualisation
     private backingFormat: MusicFormat = MusicFormat.None;
-    // private backingMidi: Midi | null = null; deprecated
     private backingAudio: AudioBuffer | null = null;
-    private backingMusicXml : ScoreModel | null = null;
 
-    private part: Part;
+    // re-enable
+    private selectedChannel : number = -1;
+
+    private trackTitle : string = "";
     private player :IPlayer | null = null;
     private visualiser : IPlayer | null = null;
     private playHead : PlayHead;
@@ -116,15 +129,109 @@ export class PlaySession {
     private mic: Mic;
     private isMicOn: boolean = false;
 
-    constructor(track: Track, part: Part) {
-        this.part = part;
+    // time and pitch modification
+    private timeScale: number = 1.0;
+    private pitchShift: number = 0;
+    private startTempo = 120;
+    private currentTempo: number = 120;
+
+    private changeListeners: Array<() => void> = [];
+
+    private scaleListeners: Array<() => void> = [];
+
+    // zoom level
+    private zoomFactor:number = 1;
+
+    channels: AudioChannel[] = [];
+
+    // instruments
+    instrumentBank: InstrumentBank;
+
+    private trackReady = false;
+
+    isTrackReady() {
+        return this.trackReady;
+    }
+
+    onChange(cb: () => void) {
+        this.changeListeners.push(cb);
+    }
+
+    private emitChange() {
+        for (const cb of this.changeListeners) cb();
+    }
+
+    onScale(cb: () => void) {
+        this.scaleListeners.push(cb);
+    }
+
+    private emitScale()
+    {
+        for (const cb of this.scaleListeners) cb();
+    }
+
+    getChannels(): AudioChannel[] {
+        return this.channels;
+    }
+
+    setChannels(channels: AudioChannel[]) {
+        this.channels = channels;
+    }
+
+    setSelectedChannelIndex(index:number) {
+        this.selectedChannel = index;
+    }
+
+    getSelectedChannelIndex(): number {
+        return this.selectedChannel;
+    }
+
+    getSelectedPlaybackEvents() : PlaybackEvent[] {
+        if(this.selectedChannel >= 0 && this.channels.length > this.selectedChannel)
+        {
+            return getPlaybackForPart(this.playbackEvents,this.referenceScore, this.channels[this.selectedChannel].part);
+        }
+        return [];
+    }
+
+    getAllPlaybackEvents(): PlaybackEvent[][] {
+        return this.playbackEvents;
+    }
+
+    getTrackTitle()
+    {
+        return this.trackTitle;
+    }
+
+    getChannelTitle() {
+        const channel = this.channels[this.selectedChannel];
+        const pn = channel.part.partName;
+        if (pn != null) return pn;
+        return this.selectedChannel.toString();
+    }
+
+
+    constructor() {
         this.playHead = new PlayHead();
         this.mic = new Mic();
         this.results = new Results();
+        this.instrumentBank = new InstrumentBank();
     }
 
     getResults(): Results {
         return this.results;
+    }
+
+    getBackingMusicXml() : XmlScorePartwise | null {
+        return this.referenceScore;
+    }
+
+    getReferenceMusicXml() : XmlScorePartwise | null {
+        return this.referenceScore;
+    }
+
+    getPlaybackEvents() : PlaybackEvent[][] {
+        return this.playbackEvents;
     }
 
     async setMicState(isRecording: boolean): Promise<void> {
@@ -153,139 +260,122 @@ export class PlaySession {
         return path.substring(idx + 1).toLowerCase();
     }
 
-    getMeasureBoundaries(): { measure: number; time: number }[] {
-        if (!this.referenceMusicXml) return [];
+    private populatePlayData() {
 
-        return this.referenceMusicXml.measures
-            .filter(m => m.partIndex === 0)   // only top part defines measure boundaries
-            .map(m => ({
-                measure: m.index,
-                time: m.startTime
-            }));
+        this.refFormat = MusicFormat.MusicXml;
+
+        const maxTime: number = getPlaybackScoreLengthSeconds(this.playbackEvents);
+
+        this.playHead.setMaxTime(maxTime);
+        this.playHead.setLoopStart(0);
+        this.playHead.setLoopEnd(maxTime);
+
+        this.startTempo = getStartingTempoFromPlayback(this.playbackEvents);
+        this.currentTempo = this.startTempo;
     }
 
-    async load() {
-        // without a part we can't train the singer
-        const referenceUrl = `${BASE_URL}${this.part.reference}`;
+    async loadInstruments(score:XmlScorePartwise)
+    {
+        const scoreParts = getPartList(score);
 
-        // the reference can be midi or musicXml
-        // we'll add a common interface for them
-        const referenceExtension = this.getExtension(this.part.reference);
+        for (let i = 0; i < scoreParts.length; i++) {
+            const gmName = resolveInstrumentName(scoreParts[i]);
+            await this.instrumentBank.loadInstrumentForPart(i, gmName);
+        }
+    }
+
+    async loadTrack(track: ManifestTrack) {
+        const referenceUrl = `${BASE_URL}${track.reference}`;
+
+        this.trackReady = false;
+
+        // reference is now either MusicXml or Mxl
+        const referenceExtension = this.getExtension(track.reference);
 
         switch(referenceExtension)
         {
-            // dropping midi as a format
-            // case "mid":
-            // case "midi":
-            // {
-            //     this.referenceMidi = await this.loadMidi(referenceUrl);
-            //     this.refFormat = MusicFormat.Midi;
-            // }
-            // break;
             case "musicxml":
             {
-                this.referenceMusicXml = await this.loadMusicXmlScore(referenceUrl);
-                this.refFormat = MusicFormat.MusicXml;
-                const maxTime : number  = getLength(this.referenceMusicXml)
-                this.playHead.setMaxTime(maxTime);
-                this.playHead.setLoopStart(0);
-                this.playHead.setLoopEnd(maxTime);
+                const xml:XmlScorePartwise = await this.loadMusicXmlScoreUrl(referenceUrl);
+                await this.load(xml);
             }
-            break;
+                break;
             case "mxl":
             {
-                this.referenceMusicXml = await this.loadMxlScore(referenceUrl);
-                this.refFormat = MusicFormat.MusicXml;
-                const maxTime : number  = getLength(this.referenceMusicXml)
-                this.playHead.setMaxTime(maxTime);
-                this.playHead.setLoopStart(0);
-                this.playHead.setLoopEnd(maxTime);
+                const xml:XmlScorePartwise = await this.loadMxlScore(referenceUrl);
+                await this.load(xml);
             }
-            break;
+                break;
             default:
                 this.refFormat = MusicFormat.None;
                 // no point continuing
                 return;
         }
 
-        // just add the reference when the backing is empty
-        if(this.part.backing == null)
+        // track.parts are now used for audio
+        // i.e. backing tracks
+        if(track.parts != null)
         {
-            this.part.backing = this.part.reference;
-            this.backingFormat = this.refFormat;
-        }
-
-        if(this.part.backing == this.part.reference)
-        {
-            switch(referenceExtension)
-            {
-                case "musicxml":
-                case "mxl":
-                {
-                    if(this.referenceMusicXml != null)
-                    {
-                        // don't load it again
-                        this.backingMusicXml = this.referenceMusicXml;
-                        this.backingFormat = this.refFormat;
-                        const musicXml = new SharedPlayer(this, this.playHead);
-                        musicXml.setMusicXml(this.backingMusicXml);
-                        this.player = musicXml;
-                    }
-
-                    // add code here
-                }
-                break;
-                default:
-                    // no point continuing
-                    return;
-            }
+            // add code for the backing tracks
         }
         else
         {
-            // the backing is a different file.
-            // audio files are also acceptable here
-            const backingUrl = `${BASE_URL}${this.part.backing}`;
-            const backingExtension = this.getExtension(this.part.backing);
-
-            switch(backingExtension)
-            {
-                case "musicxml":
-                {
-                    this.backingMusicXml = await this.loadMusicXmlScore(backingUrl);
-                    this.backingFormat = MusicFormat.MusicXml;
-                    const musicXml = new SharedPlayer(this,this.playHead);
-                    musicXml.setMusicXml(this.backingMusicXml);
-                    this.player = musicXml;
-                }
-                break;
-
-                case "mxl":
-                {
-                    this.backingMusicXml = await this.loadMxlScore(backingUrl);
-                    this.backingFormat = MusicFormat.MusicXml;
-                    const musicXml = new SharedPlayer(this, this.playHead);
-                    musicXml.setMusicXml(this.backingMusicXml);
-                    this.player = musicXml;
-                }
-                break;
-
-                case "mp3":
-                {
-                    // we are going to play audio
-                    const response = await fetch(backingUrl);
-                    const arrayBuffer = await response.arrayBuffer();
-                    const offline = new OfflineAudioContext(1, 1, 44100);
-                    this.backingAudio = await offline.decodeAudioData(arrayBuffer);
-                    this.backingFormat = MusicFormat.Audio;
-                    const audio = new AudioPlayer(this);
-                    audio.setAudio(this.backingAudio);
-                    this.player = audio;
-                }
-                    break;
-                default:
-                    return;
-            }
+            // use the reference as the backing
+            // add this back with new XmlScorePartwise
+            // this.setBackingParts(this.referenceScore.partInfo);
+            // this.player = new TonePlayer(this, this.playHead);
+            this.player = new SoundFontPlayer(this, this.playHead, this.instrumentBank);
         }
+    }
+
+    private async load(xml: XmlScorePartwise) {
+        // const expanded:XmlScore = expandScoreRepeats(xml);
+        // this.referenceScore = createMidiScore(expanded);
+        this.referenceScore = xml;
+        this.trackTitle = getTitle(xml);
+        this.playbackEvents = buildScorePlayback(this.referenceScore, 480);
+        this.channels = buildScoreChannels(this.referenceScore);
+        this.populatePlayData();
+        await this.loadInstruments(xml);
+        this.trackReady = true;
+    }
+
+    getZoomFactor(): number {
+        return this.zoomFactor;
+    }
+
+    setZoomFactor(zoomFactor: number) {
+        this.zoomFactor = zoomFactor;
+        this.emitScale();
+    }
+
+    getTimeScale() : number
+    {
+        return this.timeScale;
+    }
+
+    getTempo()
+    {
+        return this.currentTempo;
+    }
+
+    setTempo(tempo:number)
+    {
+        this.currentTempo = tempo;
+        this.timeScale = this.startTempo / this.currentTempo;
+        // maybe change the time values here
+        this.emitChange();
+    }
+
+    getPitchShift() : number
+    {
+        return this.pitchShift;
+    }
+
+    setPitchShift(shift:number)
+    {
+        this.pitchShift = shift;
+        this.emitChange();
     }
 
     getLoopStart() : number
@@ -306,44 +396,46 @@ export class PlaySession {
         this.playHead.setLoopEnd(time);
     }
 
-    async loadMxlScore(url:string):Promise<ScoreModel> {
-        // Load the .mxl file (ZIP)
+    loadMusicXmlString(xmlString: string): XmlScorePartwise {
+        const parser = new XMLParser({
+            ignoreAttributes: false,
+            attributeNamePrefix: "@_",
+            allowBooleanAttributes: true,
+            parseAttributeValue: false,
+            preserveOrder: false
+        });
+
+        const json = parser.parse(xmlString);
+
+        return json["score-partwise"] as XmlScorePartwise;
+    }
+
+    async loadMxlScore(url: string): Promise<XmlScorePartwise> {
         const data = await fetch(url).then(r => r.arrayBuffer());
         const zip = await JSZip.loadAsync(data);
 
-        // MusicXML inside MXL is usually named "score.xml"
         const file = zip.file("score.xml");
         if (!file) throw new Error("MXL file does not contain score.xml");
 
-        // Extract XML text
         const xmlText = await file.async("string");
 
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(xmlText, "application/xml");
-
-        // ⭐ This is the important line
-        return parseMusicXml(xmlDoc);
+        return this.loadMusicXmlString(xmlText);
     }
 
-    async loadMusicXmlScore(url: string): Promise<ScoreModel> {
+
+    async loadMusicXmlScoreUrl(url: string): Promise<XmlScorePartwise> {
         const res = await fetch(url);
         const xmlText = await res.text();
-
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(xmlText, "application/xml");
-
-        // ⭐ This is the important line
-        return parseMusicXml(xmlDoc);
+        return this.loadMusicXmlString(xmlText);
     }
 
-    getPart()
-    {
-        if(this.part.part != null)
-        {
-            return this.part.part;
-        }
-        return -1;
-    }
+
+    // re-enable this
+    // getPartName():string | null
+    // {
+    //     if(this.selectedPart != null) return this.selectedPart.name;
+    //     return null;
+    // }
 
     getReferenceFormat() : MusicFormat
     {
@@ -355,22 +447,12 @@ export class PlaySession {
         return this.backingFormat;
     }
 
-    // getReferenceMidi(): Midi {
-    //     if (!this.referenceMidi) throw new Error("MIDI not loaded yet");
-    //     return this.referenceMidi;
-    // }
-
-    getReferenceScore() : ScoreModel {
-        if(!this.referenceMusicXml) throw new Error("MusicXML not loaded yet");
-        return this.referenceMusicXml;
-    }
-
     isAudio(): boolean {
         return this.player instanceof AudioPlayer;
     }
 
     isMidi(): boolean {
-        return this.player instanceof SharedPlayer;
+        return this.player instanceof TonePlayer;
     }
 
 
@@ -389,8 +471,8 @@ export class PlaySession {
         return null;
     }
 
-    getBackingScore() : ScoreModel | null {
-        return this.backingMusicXml;
+    getBackingScore() : XmlScorePartwise | null {
+        return this.referenceScore;
     }
 
     getIsPlaying() : boolean {
@@ -409,6 +491,14 @@ export class PlaySession {
 
     getCurrentTime(): number {
         return this.playHead.getCurrentTime();
+    }
+
+    isAtEnd()
+    {
+        if(this.playHead.getCurrentTime() >= this.playHead.getMaxTime())
+        {
+            return true;
+        }
     }
 
     // The microphone response will be later
@@ -437,6 +527,17 @@ export class PlaySession {
 
     getMicVolume() {
         return this.mic.getVolume();
+    }
+
+    playMidi(midi: number) {
+        const inst = this.instrumentBank.getInstrument(0);
+        if(inst)
+        {
+            inst.play(midi, this.instrumentBank.now(), {
+                duration: 1,
+                gain: 0.8 // ev.velocity ?? 0.8
+            });
+        }
     }
 
     // pass on the play controls

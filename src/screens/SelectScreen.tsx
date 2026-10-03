@@ -1,17 +1,20 @@
+import { useState } from "react";
+import type { PlaySession } from "../audio/PlaySession";
 import { PartSelector } from "../components/PartSelector";
-import type { Track, Part } from "../useManifest";
 
 export function SelectScreen({
-                                 track,
-                                 selectedPart,
-                                 onSelectPart,
+                                 session,
                                  onGo
                              }: {
-    track: Track;
-    selectedPart: Part | null;
-    onSelectPart: (p: Part | null) => void;
+    session: PlaySession;
     onGo: () => void;
 }) {
+    // ⭐ React does NOT track changes inside session, so we trigger a re-render manually
+    const [, forceUpdate] = useState(0);
+
+    const channels = session.getChannels();
+    const selectedIndex = session.getSelectedChannelIndex();
+
     return (
         <div style={{
             fontFamily: 'sans-serif',
@@ -39,26 +42,31 @@ export function SelectScreen({
                 border: '1px solid #ddd',
                 background: '#fafafa'
             }}>
-                <h2 style={{ marginTop: 0 }}>{track.title}</h2>
+                <h2 style={{ marginTop: 0 }}>
+                    {session.getTrackTitle() ?? "Selected Track"}
+                </h2>
 
                 <PartSelector
-                    parts={track.parts}
-                    selectedPart={selectedPart}
-                    onChange={onSelectPart}
+                    channels={channels}
+                    selectedIndex={selectedIndex}
+                    onSelect={(index) => {
+                        session.setSelectedChannelIndex(index);
+                        forceUpdate(x => x + 1);   // ⭐ trigger re-render
+                    }}
                 />
 
                 <button
                     onClick={onGo}
-                    disabled={!selectedPart}
+                    disabled={selectedIndex === -1}
                     style={{
                         marginTop: '20px',
                         padding: '12px 20px',
                         fontSize: '16px',
                         borderRadius: '6px',
                         border: 'none',
-                        background: selectedPart ? '#0077ff' : '#ccc',
+                        background: selectedIndex !== -1 ? '#0077ff' : '#ccc',
                         color: 'white',
-                        cursor: selectedPart ? 'pointer' : 'not-allowed'
+                        cursor: selectedIndex !== -1 ? 'pointer' : 'not-allowed'
                     }}
                 >
                     Go
@@ -67,3 +75,10 @@ export function SelectScreen({
         </div>
     );
 }
+
+
+
+
+
+
+

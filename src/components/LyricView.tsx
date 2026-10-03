@@ -1,36 +1,18 @@
 import { useEffect, useRef } from "react";
-// import { LyricPanel } from "../rendering/LyricPanel";
-import {AutoCue} from "../rendering/AutoCue";
-import {MusicFormat, type PlaySession} from "../audio/PlaySession";
+import {type PlaySession} from "../audio/PlaySession";
+import {Cue} from "../rendering/Cue";
 
 export function LyricView({ session }: { session: PlaySession }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const autoRef = useRef<AutoCue | null>(null);
+    const autoRef = useRef<Cue | null>(null);
 
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const auto = new AutoCue(canvas, session);
+        const auto = new Cue(canvas, session);
         autoRef.current = auto;
-
-        const format:MusicFormat = session.getBackingFormat()
-
-        switch(format) {
-            case MusicFormat.None:
-                break;
-            case MusicFormat.MusicXml:
-            {
-                const score = session.getBackingScore();
-                if(score != null) {
-                    auto.setScore(score,session.getPart());
-                }
-            }
-                break;
-            default:
-                break;
-        }
-
+        auto.populateNotes();
         auto.resize();
 
         let raf: number;

@@ -1,8 +1,22 @@
-import type {Note, ScoreModel} from "../audio/Types";
-import * as MidiUtils from "../midi/midiUtils";
-import { playMidi } from "../audio/NotePlayer";
 import {PlaySession} from "../audio/PlaySession";
-import * as MxmlUtils from "../midi/musicXmlUtils"
+import {getLyricText, getStartingKey, type XmlPitch, xmlPitchToMidi} from "../fastXml/helpers";
+import {getPlaybackNoteAtTime, isPlaybackNote, type PlaybackEvent, type PlaybackNote} from "../fastXml/playback";
+import {freqToCents, freqToMidi, midiToFreq} from "../midi/midiUtils";
+import {buildScale, pitchClassFromFifths} from "../midi/musicXmlUtils";
+
+function midiToName(midi: number): string {
+    const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    const pc = midi % 12;
+    const octave = Math.floor(midi / 12) - 1;
+    return `${names[pc]}${octave}`;
+}
+
+function isSharpOrFlat(midi: number): boolean {
+    const pc = midi % 12;
+    // sharps/flats are the black keys
+    return [1, 3, 6, 8, 10].includes(pc);
+}
+
 
 export class PianoRoll {
     canvas: HTMLCanvasElement;
@@ -17,7 +31,7 @@ export class PianoRoll {
     noteScale = 2.5;   // 160% size, tweak to taste
 
     pitchHeight = 30; // maybe if we want smaller, (logic needs fixing)
-    xScale = 100;
+    xScaleUnit = 100;
     chromaticStep = 5;
 
     lowestMidi = -1;
@@ -29,11 +43,9 @@ export class PianoRoll {
     pitch = 0;
     cents = 0;
 
-    model : ScoreModel | null = null;
-
-    notes: Note[] = [];
-    private measureBoundaries: { measure: number; start: number }[] = [];
-    private keyChangeBoundaries: { measure: number; start: number; fifths: number; mode: string }[] = [];
+    playbackEvents: PlaybackEvent[] = [];
+    // private measureBoundaries: { measure: string; start: number }[] = [];
+    // private keyChangeBoundaries: { measure: number; start: number; fifths: number; mode: string }[] = [];
 
     tempo = 0;
 
@@ -44,7 +56,6 @@ export class PianoRoll {
     private dragStartTime = 0;
     private dragStartScrollX = 0;
 
-    highestTime: number = 0;
     headOffset: number = 2;
 
     HIT_COLORS = {
@@ -67,6 +78,11 @@ export class PianoRoll {
 
     ACTIVE_NOTE: string =  "#cc1e1e";
 
+    private clickedNoteId: PlaybackEvent | null = null;
+    private clickedLaneMidi: number | null = null;
+    private clearSelectionTimer: number | null = null;
+    private clickedLabel: string | null = null;
+
     // pitchBlocks: { time: number; pitch: number; n: Note | null;}[] = [];
 
     constructor(canvas: HTMLCanvasElement,session: PlaySession) {
@@ -76,6 +92,58 @@ export class PianoRoll {
         if (!ctx) throw new Error("Canvas 2D context unavailable");
         this.ctx = ctx;
         this.attachScrollHandlers();
+        this.session.onChange(() => this.populateNotes());
+
+        this.attachWheelZoom();
+        this.attachPinchZoom();
+    }
+
+    attachWheelZoom() {
+        this.canvas.addEventListener("wheel", (e) => {
+            e.preventDefault();
+
+            const delta = e.deltaY < 0 ? 1.1 : 0.9;
+            // just local for now
+            this.session.setZoomFactor(this.session.getZoomFactor() * delta);
+
+            this.render();
+        }, { passive: false });
+    }
+
+    attachPinchZoom() {
+        let lastDist = 0;
+
+        const getDist = (t: TouchList) => {
+            const a = t[0], b = t[1];
+            const dx = a.clientX - b.clientX;
+            const dy = a.clientY - b.clientY;
+            return Math.sqrt(dx*dx + dy*dy);
+        };
+
+        this.canvas.addEventListener("touchmove", (e) => {
+            if (e.touches.length !== 2) return;
+            e.preventDefault();
+
+            const dist = getDist(e.touches);
+
+            if (lastDist !== 0) {
+                const factor = dist / lastDist;
+                // just do locally for now
+                this.session.setZoomFactor(this.session.getZoomFactor() * factor);
+                this.render();
+            }
+
+            lastDist = dist;
+        }, { passive: false });
+
+        this.canvas.addEventListener("touchend", () => {
+            lastDist = 0;
+        });
+    }
+
+    private getScale()
+    {
+        return this.xScaleUnit * this.session.getZoomFactor();
     }
 
     private attachScrollHandlers() {
@@ -107,7 +175,7 @@ export class PianoRoll {
             // dx is the number of pixels
             const dx = (this.dragStartScrollX - e.clientX);
             // converted to seconds
-            const deltaSeconds = dx / (this.xScale);
+            const deltaSeconds = dx / this.getScale();
             const targetTime:number = this.dragStartTime + deltaSeconds;
             this.session.seek(targetTime);
             this.render();
@@ -133,20 +201,45 @@ export class PianoRoll {
         });
     }
 
+    private clearSelection() {
+        this.clickedNoteId = null;
+        this.clickedLaneMidi = null;
+        this.clickedLabel = null;
+        this.render();
+    }
+
     private handleClick(e: MouseEvent) {
         const rect = this.canvas.getBoundingClientRect();
         const x = e.clientX - rect.left + this.scrollX;
         const y = e.clientY - rect.top;
 
         const t = this.session.getCurrentTime();
+        const xScale = this.getScale();
 
-        // --- 1. Try clicking a note ---
-        for (const n of this.notes) {
-            const noteX = (n.start - (t - this.headOffset)) * this.xScale;
-            const noteW = n.duration * this.xScale;
+        // Reset highlight state
+        this.clickedNoteId = null;
+        this.clickedLaneMidi = null;
 
-            const yTop = this.midiToY(n.midi + 1);
-            const yBottom = this.midiToY(n.midi);
+        // --- 1. Try clicking an expected note (scaled geometry) ---
+        for (const ev of this.playbackEvents) {
+            if (!isPlaybackNote(ev) || ev.note.pitch == null) continue;
+
+            const expectedMidi = xmlPitchToMidi(ev.note.pitch);
+            this.clickedLabel = midiToName(expectedMidi);
+
+            // X geometry
+            const noteX = (ev.timeSeconds - (t - this.headOffset)) * xScale;
+            const noteW = ev.durationSeconds * xScale;
+
+            // Y geometry (scaled, same as drawExpected)
+            const yTopBase = this.midiToY(expectedMidi + 1);
+            const yBottomBase = this.midiToY(expectedMidi);
+
+            const baseH = yBottomBase - yTopBase;
+            const scaledH = baseH * this.noteScale;
+
+            const yTop = yTopBase - (scaledH - baseH) / 2;
+            const yBottom = yTop + scaledH;
 
             const hit =
                 x >= noteX &&
@@ -155,25 +248,57 @@ export class PianoRoll {
                 y <= yBottom;
 
             if (hit) {
-                this.onNoteClicked(n);
+                // Play the EXPECTED note pitch
+                this.session.playMidi(expectedMidi);
+
+                // Store the exact block that was clicked
+                this.clickedNoteId = ev;
+                this.clickedLaneMidi = null; // clear lane highlight
+
+                // reset after 1 second
+                if (this.clearSelectionTimer !== null) {
+                    clearTimeout(this.clearSelectionTimer);
+                }
+                this.clearSelectionTimer = window.setTimeout(() => {
+                    this.clearSelection();
+                }, 1000);
+
+                this.render();
                 return;
             }
         }
 
-        // --- 2. No note clicked → play nearest diatonic pitch ---
-        const chromaticMidi = this.yToMidi(y);
-        playMidi(chromaticMidi);
-    }
+        // --- 2. No note clicked → highlight lane + play lane pitch ---
+        // --- Lane hit-test using exact geometry ---
+        for (let midi = this.lowestMidi; midi <= this.highestMidi; midi++) {
+            const yTop = this.midiToY(midi + 1);
+            const yBottom = this.midiToY(midi);
 
+            if (y >= yTop && y <= yBottom) {
+                this.session.playMidi(midi);
+                this.clickedLaneMidi = midi;
 
-    private onNoteClicked(n: Note) {
-        playMidi(n.midi);
+                this.clickedLabel = midiToName(midi);
+
+// reset after 1 second
+                if (this.clearSelectionTimer !== null) {
+                    clearTimeout(this.clearSelectionTimer);
+                }
+                this.clearSelectionTimer = window.setTimeout(() => {
+                    this.clearSelection();
+                }, 1000);
+
+                this.render();
+                return;
+            }
+        }
+
     }
 
     private updateScrollLimits() {
         this.maxScrollX = Math.max(
             0,
-            this.highestTime * this.xScale - this.canvas.width
+            this.session.getMaxTime() * this.getScale() - this.canvas.width
         );
         this.clampScroll();
     }
@@ -192,49 +317,44 @@ export class PianoRoll {
         this.render();
     }
 
-    setScore(model: ScoreModel, selectedPartIndex: number) {
-        this.model = model;
-        this.notes = model.notes
-            .filter(n => selectedPartIndex === -1 || n.partIndex === selectedPartIndex)
-            .map(n => ({
-                midi: n.pitch,
-                start: n.startTime,
-                duration: n.duration,
-                measureIndex: n.measureIndex,
-                velocity: 0.8,
-                partIndex: n.partIndex,
-                lyric: n.lyric ?? null
-            }) satisfies Note);
+    populateNotes()
+    {
+        const score = this.session.getReferenceMusicXml();
+        this.playbackEvents = this.session.getSelectedPlaybackEvents();
 
-        const firstKey = this.model.keyChanges[0];
-        const { fifths, mode } = firstKey;
+        const firstKey = getStartingKey(score);
+        if(!firstKey?.fifths || !firstKey?.mode) return;
 
-        this.tonicPc = MxmlUtils.pitchClassFromFifths(fifths);
-        this.scalePcs = MxmlUtils.buildScale(this.tonicPc, mode);
+        this.tonicPc = pitchClassFromFifths(firstKey.fifths);
+        this.scalePcs = buildScale(this.tonicPc, firstKey.mode);
 
         this.calculateRange();
-        this.measureBoundaries = this.computeMeasureBoundaries();
-        this.keyChangeBoundaries = this.computeKeyChangeBoundaries();
+        // this.measureBoundaries = computeMeasureBoundaries(musicXml, this.session.getTimeScale());
+        // this.keyChangeBoundaries = this.computeKeyChangeBoundaries();
 
-        this.maxScrollX = this.highestTime * this.xScale - this.canvas.width;
+        this.maxScrollX = this.session.getMaxTime() * this.getScale() - this.canvas.width;
         if (this.maxScrollX < 0) this.maxScrollX = 0;
     }
 
-
     calculateRange() {
-        const notes = this.notes;
+        const notes = this.playbackEvents;
 
         if (notes.length === 0) return;
 
-        // this is more about reading the midi (once)
-        this.lowestMidi = notes.reduce((a, b) => a.midi < b.midi ? a : b).midi - 1;
-        this.highestMidi = notes.reduce((a, b) => a.midi > b.midi ? a : b).midi + 1;
-        this.highestTime = Math.max(...this.notes.map(n => n.start + n.duration));
+        const pitches = this.playbackEvents
+            .filter(isPlaybackNote)
+            .map(ev => xmlPitchToMidi(ev.note.pitch))
+            .filter((midi): midi is number => midi > 0);
+
+        if (pitches.length === 0) return;
+
+        this.lowestMidi  = Math.min(...pitches) - 1;
+        this.highestMidi = Math.max(...pitches) + 2;
 
         // this is more about sizing (multiple)
         this.gridSize = Math.max(this.highestMidi - this.lowestMidi + 1, 7);
         this.noteHeight = this.canvas.height / this.gridSize;
-        this.maxScrollX = Math.max(0, this.highestTime * this.xScale - this.canvas.width);
+        this.maxScrollX = Math.max(0, this.session.getMaxTime() * this.getScale() - this.canvas.width);
     }
 
 
@@ -257,20 +377,20 @@ export class PianoRoll {
         if (this.scrollX > this.maxScrollX) this.scrollX = this.maxScrollX;
     }
 
-    private getCurrentMidi():Note | null {
-        // a bit inefficient
-        const t:number = this.session.getCurrentTime();
-        for (const n of this.notes) {
-            if(t >= n.start && t < n.start + n.duration) return n;
-        }
-        return null;
-    }
+    private getCurrentNote(): PlaybackNote | null {
+        const t = this.session.getCurrentTime();
 
-    private getMidiAt(t:number)
-    {
-        for (const n of this.notes) {
-            if(t >= n.start && t < n.start + n.duration) return n;
+        for (const ev of this.playbackEvents) {
+            if (isPlaybackNote(ev)) {
+                const start = ev.timeSeconds;
+                const end = start + ev.durationSeconds;
+
+                if (t >= start && t < end) {
+                    return ev;
+                }
+            }
         }
+
         return null;
     }
 
@@ -290,107 +410,57 @@ export class PianoRoll {
                 ? "#ffe8a0"
                 : isDiatonic
                     ? "#f0f0f0"
-                    : "#e0e0e0";
+                    : "#4e4e4e";
 
             ctx.fillRect(0, yTop, this.canvas.width, yBottom - yTop);
-        }
-    }
 
-    // maybe do this once
-    private computeMeasureBoundaries(): { measure: number, start: number }[] {
-        if(this.model) {
-            return this.model.measures
-                .filter(m => m.partIndex === 0)
-                .sort((a, b) => a.index - b.index)
-                .map(m => ({
-                    measure: m.index,
-                    start: m.startTime
-                }));
-        }
-        return [];
-    }
+            // Highlight lane if clicked
+            if (midi === this.clickedLaneMidi) {
+                ctx.strokeStyle = "#ffcc00";   // gold outline
+                ctx.lineWidth = 3;
 
-    computeKeyChangeBoundaries(): { measure: number; start: number; fifths: number; mode: string }[] {
-        const model = this.model;
-        if (!model) return [];
-
-        return model.keyChanges.map(kc => {
-            const measure = model.measures.find(m => m.index === kc.measureIndex && m.partIndex === 0);
-            return {
-                measure: kc.measureIndex,
-                start: measure?.startTime ?? 0,
-                fifths: kc.fifths,
-                mode: kc.mode
-            };
-        });
-    }
-
-    private drawBars() {
-        const ctx = this.ctx;
-        const width = this.canvas.width;
-        const height = this.canvas.height;
-
-        const t = this.session.getCurrentTime();
-        const xScale = this.xScale;
-        const scrollX = this.scrollX;
-        const headOffset = this.headOffset;
-
-        for (const m of this.measureBoundaries) {
-
-            // EXACT SAME coordinate math as drawTime()
-            const x = (m.start - (t - headOffset)) * xScale - scrollX;
-
-            // Skip bars outside viewport
-            if (x < 0 || x > width) continue;
-
-            // Draw vertical bar line
-            ctx.strokeStyle = "#999";
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, height);
-            ctx.stroke();
-
-            // Draw measure number
-            ctx.fillStyle = "#555";
-            ctx.font = "12px sans-serif";
-            ctx.textBaseline = "top";
-            ctx.fillText(`M${m.measure + 1}`, x + 4, 4);
+                ctx.strokeRect(
+                    0,
+                    yTop,
+                    this.canvas.width,
+                    yBottom - yTop
+                );
+            }
         }
     }
 
     private drawKeyChanges() {
-        const ctx = this.ctx;
-        const width = this.canvas.width;
+        // const ctx = this.ctx;
+        // const width = this.canvas.width;
+        //
+        // const t = this.session.getCurrentTime();
+        // const xScale = this.getScale();
+        // const scrollX = this.scrollX;
+        // const headOffset = this.headOffset;
 
-        const t = this.session.getCurrentTime();
-        const xScale = this.xScale;
-        const scrollX = this.scrollX;
-        const headOffset = this.headOffset;
-
-        for (const kc of this.keyChangeBoundaries) {
-
-            // Same math as drawTime() and drawBars()
-            const x = (kc.start - (t - headOffset)) * xScale - scrollX;
-
-            if (x < 0 || x > width) continue;
-
-            // Draw a small marker line
-            ctx.strokeStyle = "#4a9";
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(x, 0);
-            ctx.lineTo(x, 20);
-            ctx.stroke();
-
-            // Draw the key label
-            ctx.fillStyle = "#4a9";
-            ctx.font = "12px sans-serif";
-            ctx.textBaseline = "top";
-
-            const keyName = MidiUtils.keyNameFromFifths(kc.fifths, kc.mode);
-            ctx.fillText(keyName, x + 4, 2);
-        }
+        // for (const kc of this.keyChangeBoundaries) {
+        //
+        //     // Same math as drawTime() and drawBars()
+        //     const x = (kc.start - (t - headOffset)) * xScale - scrollX;
+        //
+        //     if (x < 0 || x > width) continue;
+        //
+        //     // Draw a small marker line
+        //     ctx.strokeStyle = "#4a9";
+        //     ctx.lineWidth = 2;
+        //     ctx.beginPath();
+        //     ctx.moveTo(x, 0);
+        //     ctx.lineTo(x, 20);
+        //     ctx.stroke();
+        //
+        //     // Draw the key label
+        //     ctx.fillStyle = "#4a9";
+        //     ctx.font = "12px sans-serif";
+        //     ctx.textBaseline = "top";
+        //
+        //     const keyName = MidiUtils.keyNameFromFifths(kc.fifths, kc.mode);
+        //     ctx.fillText(keyName, x + 4, 2);
+        // }
     }
 
     private midiToY(midi: number): number {
@@ -412,92 +482,105 @@ export class PianoRoll {
 
         const pitch = this.session.getPitch();
         const hasPitch = this.isValidPitch(pitch);
-        const sungMidi = hasPitch ? MidiUtils.freqToMidi(pitch) : null;
+        const sungMidi = hasPitch ? freqToMidi(pitch) : null;
 
-        for (const n of this.notes) {
-            if (n.start >= (t - this.headOffset)) {
+        for (const ev of this.playbackEvents) {
+            if (isPlaybackNote(ev)) {
+                const noteStart = ev.timeSeconds;
+                const noteEnd   = ev.timeSeconds + ev.durationSeconds;
 
-                // geometry (unchanged)
-                const yTop = this.midiToY(n.midi + 1);
-                const yBottom = this.midiToY(n.midi);
+// Show notes that haven't finished yet
+                if (noteEnd >= (t - this.headOffset)) {
+                    if (ev.note.pitch != null) {
+                        const expectedPitch = xmlPitchToMidi(ev.note.pitch);
 
-                const baseH = yBottom - yTop;
-                const scaledH = baseH * this.noteScale;
+                        // geometry (unchanged)
+                        const yTop = this.midiToY(expectedPitch + 1);
+                        const yBottom = this.midiToY(expectedPitch);
 
-                const y = yTop - (scaledH - baseH) / 2;
-                const h = scaledH;
+                        const baseH = yBottom - yTop;
+                        const scaledH = baseH * this.noteScale;
 
-                const x = (n.start - (t - this.headOffset)) * this.xScale - this.scrollX;
-                const w = n.duration * this.xScale;
+                        const y = yTop - (scaledH - baseH) / 2;
+                        const h = scaledH;
 
-                // your timing model for active note
-                const isActive = t >= n.start && t < n.start + n.duration;
+                        const x = (ev.timeSeconds - (t - this.headOffset)) * this.getScale() - this.scrollX;
+                        const w = ev.durationSeconds * this.getScale();
 
-                // --- HIT TESTING (current pitch only) ---
-                if (hasPitch && isActive && sungMidi === n.midi) {
-                    const targetFreq = MidiUtils.midiToFreq(n.midi);
-                    const cents = Math.abs(1200 * Math.log2(pitch / targetFreq));
+                        // your timing model for active note
+                        const isActive = t >= ev.timeSeconds && t < ev.timeSeconds + ev.durationSeconds;
 
-                    // update best tuning
-                    if (n.bestCents === undefined || cents < n.bestCents) {
-                        n.bestCents = cents;
-                    }
+                        // --- HIT TESTING (current pitch only) ---
+                        if (hasPitch && isActive && sungMidi === expectedPitch) {
+                            const targetFreq = midiToFreq(expectedPitch);
+                            const cents = Math.abs(1200 * Math.log2(pitch / targetFreq));
 
-                    // mark as hit if within tolerance
-                    if (cents < 50) {
-                        n.hit = true;
-                    }
-                }
+                            // update best tuning
+                            if (ev.performance.cents === undefined || cents < ev.performance.cents) {
+                                ev.performance.cents = cents;
+                            }
 
-                const isHit = !!n.hit;
-                const best = n.bestCents ?? 999;
+                            // mark as hit if within tolerance
+                            if (cents < 50) {
+                                ev.performance.hit = true;
+                            }
+                        }
 
-                // --- COLOUR SELECTION ---
+                        const isHit = ev.performance.hit;
+                        const best = ev.performance.cents ?? 999;
+
+                        // --- COLOUR SELECTION ---
 /// Determine tuning category
-                let tuningCategory: "gold" | "silver" | "bronze" | "miss";
+                        let tuningCategory: "gold" | "silver" | "bronze" | "miss";
 
-                if (!isHit) {
-                    tuningCategory = "miss";
-                } else {
-                    if (best < 10) tuningCategory = "gold";
-                    else if (best < 25) tuningCategory = "silver";
-                    else if (best < 50) tuningCategory = "bronze";
-                    else tuningCategory = "miss";
-                }
+                        if (!isHit) {
+                            tuningCategory = "miss";
+                        } else {
+                            if (best < 10) tuningCategory = "gold";
+                            else if (best < 25) tuningCategory = "silver";
+                            else if (best < 50) tuningCategory = "bronze";
+                            else tuningCategory = "miss";
+                        }
 
 // Choose colour based on active + hit + not-yet-hit
-                let fill: string;
+                        let fill: string;
 
-                if (!isHit && !isActive) {
-                    // NEW: note hasn't been sung yet → blue
-                    fill = this.STANDARD_NOTE;   // your original blue
-                }
-                else if (!isHit && isActive) {
-                    // active but not hit → your original active red
-                    fill = this.ACTIVE_NOTE;
-                }
-                else if (isHit && !isActive) {
-                    // hit but inactive → tuning colours
-                    fill = this.HIT_COLORS[tuningCategory];
-                }
-                else {
-                    // hit + active → brighter tuning colours
-                    fill = this.HIT_ACTIVE_COLORS[tuningCategory];
-                }
+                        if (!isHit && !isActive) {
+                            // NEW: note hasn't been sung yet → blue
+                            fill = this.STANDARD_NOTE;   // your original blue
+                        } else if (!isHit && isActive) {
+                            // active but not hit → your original active red
+                            fill = this.ACTIVE_NOTE;
+                        } else if (isHit && !isActive) {
+                            // hit but inactive → tuning colours
+                            fill = this.HIT_COLORS[tuningCategory];
+                        } else {
+                            // hit + active → brighter tuning colours
+                            fill = this.HIT_ACTIVE_COLORS[tuningCategory];
+                        }
 
-                ctx.fillStyle = fill;
-                ctx.strokeStyle = "#1e40af";
-                ctx.lineWidth = 2;
+                        ctx.fillStyle = fill;
+                        ctx.strokeStyle = "#1e40af";
+                        ctx.lineWidth = 2;
 
-                this.roundRect(ctx, x, y, w, h, 6);
-                ctx.fill();
-                ctx.stroke();
+                        if (this.clickedNoteId === ev) {
+                            ctx.strokeStyle = "#ffcc00";  // gold outline
+                            ctx.lineWidth = 3;
+                            this.roundRect(ctx, x, y, w, h, 6);
+                            ctx.stroke();
+                        }
 
-                if (n.lyric) {
-                    ctx.fillStyle = "white";
-                    ctx.font = `${8 * this.noteScale}px sans-serif`;
-                    ctx.textBaseline = "middle";
-                    ctx.fillText(n.lyric, x + 4, y + h / 2);
+                        this.roundRect(ctx, x, y, w, h, 6);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        const lyricText = getLyricText(ev.note);
+
+                        ctx.fillStyle = "white";
+                        ctx.font = `${8 * this.noteScale}px sans-serif`;
+                        ctx.textBaseline = "middle";
+                        ctx.fillText(lyricText, x + 4, y + h / 2);
+                    }
                 }
             }
         }
@@ -505,7 +588,7 @@ export class PianoRoll {
 
     drawPlayHead() {
         const ctx = this.ctx;
-        const x = this.headOffset * this.xScale;
+        const x = this.headOffset * this.getScale();
         const h = this.canvas.height;
 
         ctx.strokeStyle = "#ffcc00";
@@ -521,32 +604,34 @@ export class PianoRoll {
         const pitch = this.session.getPitch();
         if (pitch <= 0) return;
 
-        const midiNote: Note | null = this.getCurrentMidi();
-        if (!midiNote) {
+        const ev: PlaybackNote | null = this.getCurrentNote();
+        if (!ev) {
             this.session.getResults().addPenalty();
             return;
         }
 
-        const cents = MidiUtils.freqToCents(pitch);
-        const midi = MidiUtils.freqToMidi(pitch);
+        if(ev.note.pitch != null) {
+            const expectedMidi = xmlPitchToMidi(ev.note.pitch);
 
-        // Determine if singer is close enough to the correct note
-        const midiDiff = midi - midiNote.midi;
+            // convert the pitch (frequency) inot a midi note and number of cents
+            const cents = freqToCents(pitch);
+            const midi = freqToMidi(pitch);
 
-        // If singer is within ±100 cents of the target note
-        if (Math.abs(midiDiff) <= 1) {
+            if(midi == expectedMidi)
+            {
+                // correct note
+                const absCents = Math.abs(cents);
 
-            const absCents = Math.abs(cents);
-
-            if (absCents < 10) {
-                this.session.getResults().addGold();
+                if (absCents < 10) {
+                    this.session.getResults().addGold();
+                } else if (absCents < 25) {
+                    this.session.getResults().addSilver();
+                } else {
+                    this.session.getResults().addBronze();
+                }
             }
-            else if (absCents < 25) {
-                this.session.getResults().addSilver();
-            }
-            else {
-                this.session.getResults().addBronze();
-            }
+
+            // we could support wrong note but close here
         }
     }
 
@@ -555,7 +640,7 @@ export class PianoRoll {
     {
         if (pitch == 0) return false;
 
-        const midi = MidiUtils.freqToMidi(pitch);
+        const midi = freqToMidi(pitch);
         if((midi >= this.lowestMidi - this.cutOff ) && (midi <= this.highestMidi + this.cutOff)) return true;
 
         return false;
@@ -567,20 +652,18 @@ export class PianoRoll {
 
         const ctx = this.ctx;
 
-        const sungMidi = MidiUtils.freqToMidi(pitch);
+        const sungMidi = freqToMidi(pitch);
 
         // expected note at the current time
         const t = this.session.getCurrentTime();
 
-        const currentNote = this.notes.find(n =>
-            t >= n.start && t < n.start + n.duration
-        );
+        const currentNote = getPlaybackNoteAtTime(this.playbackEvents, t);
 
-        const expectedMidi = currentNote?.midi ?? null;
+        const expectedMidi = xmlPitchToMidi(currentNote?.note.pitch);
 
         // tuning quality
         const targetMidi = expectedMidi ?? sungMidi;
-        const targetFreq = MidiUtils.midiToFreq(targetMidi);
+        const targetFreq = midiToFreq(targetMidi);
         const cents = 1200 * Math.log2(pitch / targetFreq);
         const absCents = Math.abs(cents);
 
@@ -596,7 +679,7 @@ export class PianoRoll {
         const finalY = Math.max(yTop + 3, Math.min(yBottom - 3, yBottom - centsOffset));
 
         // X position
-        const x = (this.headOffset * this.xScale) - 3;
+        const x = (this.headOffset * this.getScale()) - 3;
 
         // determine tuning category
         let tuningCategory: "gold" | "silver" | "bronze" | "miss";
@@ -647,67 +730,6 @@ export class PianoRoll {
         ctx.stroke();
     }
 
-
-
-    drawTime() {
-        const ctx = this.ctx;
-        const width = this.canvas.width;
-        const height = this.canvas.height;
-
-        const t = this.session.getCurrentTime();
-        const xScale = this.xScale;
-        const scrollX = this.scrollX;
-        const headOffset = this.headOffset;
-
-        // Convert visible pixel range → seconds
-        const visibleStartSec = (t - headOffset) + scrollX / xScale;
-        const visibleEndSec = (t - headOffset) + (scrollX + width) / xScale;
-
-        const startSec = Math.floor(visibleStartSec);
-        const endSec = Math.ceil(visibleEndSec);
-
-        for (let sec = startSec; sec <= endSec; sec++) {
-
-            const x = (sec - (t - headOffset)) * xScale - scrollX;
-            if (x < 0 || x > width) continue;
-
-            const is5 = sec % 5 === 0;
-            const is10 = sec % 10 === 0;
-            const is60 = sec % 60 === 0;
-
-            const tickHeight =
-                is60 ? 20 :
-                    is10 ? 14 :
-                        is5  ? 10 :
-                            6;
-
-            ctx.strokeStyle = is60 ? "#ffffff"
-                : is10 ? "#dddddd"
-                    : is5  ? "#bbbbbb"
-                        : "#999999";
-
-            ctx.lineWidth = is60 ? 2 : 1;
-
-            // Draw tick ONLY at bottom
-            ctx.beginPath();
-            ctx.moveTo(x, height);
-            ctx.lineTo(x, height - tickHeight);
-            ctx.stroke();
-
-            // Draw text ONLY at bottom
-            if (is10) {
-                ctx.fillStyle = is60 ? "#ffffff" : "#cccccc";
-                ctx.font = is60 ? "16px sans-serif" : "12px sans-serif";
-
-                const secMod = sec % 60;
-                const label = is60 ? `${sec / 60}m` : `${secMod}s`;
-
-                // place text just above the bottom ticks
-                ctx.fillText(label, x + 4, height - tickHeight - 4);
-            }
-        }
-    }
-
     drawLoopRegion() {
         const ctx = this.ctx;
         const loopStart:number = this.session.getLoopStart();
@@ -719,8 +741,8 @@ export class PianoRoll {
         if (loopStart == 0 && loopEnd == maxTime) return;
 
         // convert seconds → pixels using your model
-        const startX = (loopStart - (currentTime - this.headOffset)) * this.xScale - this.scrollX;
-        const endX   = (loopEnd   - (currentTime - this.headOffset)) * this.xScale - this.scrollX;
+        const startX = (loopStart - (currentTime - this.headOffset)) * this.getScale() - this.scrollX;
+        const endX   = (loopEnd   - (currentTime - this.headOffset)) * this.getScale() - this.scrollX;
 
         const x1 = Math.min(startX, endX);
         const x2 = Math.max(startX, endX);
@@ -733,6 +755,36 @@ export class PianoRoll {
         ctx.fillRect(x1, 0, regionWidth, regionHeight);
     }
 
+    private drawPopupLabel() {
+        if (!this.clickedLabel) return;
+
+        const ctx = this.ctx;
+
+        // Determine background based on the label string
+        const isBlackKey =
+            this.clickedLabel.includes("#") ||
+            this.clickedLabel.includes("b");
+
+        const bg = isBlackKey ? "black" : "white";
+        const fg = isBlackKey ? "white" : "black";
+
+        // Draw background
+        ctx.fillStyle = bg;
+        ctx.fillRect(10, 10, 80, 80);
+
+        // Outline
+        ctx.strokeStyle = "#ffcc00";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(10, 10, 80, 80);
+
+        // Text
+        ctx.fillStyle = fg;
+        ctx.font = "20px sans-serif";
+        ctx.textBaseline = "middle";
+        ctx.fillText(this.clickedLabel, 35, 50);
+    }
+
+
     render() {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -743,8 +795,7 @@ export class PianoRoll {
         if(this.session.getIsPlaying()) {
             this.updateScore();
         }
-        // this.drawBars(); // moved to looper
         this.drawPitch();
-        //this.drawTime(); // moved to looper
+        this.drawPopupLabel();
     }
 }
