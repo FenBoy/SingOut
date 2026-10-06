@@ -1,5 +1,5 @@
 import {PlaySession} from "../audio/PlaySession";
-import {type PlaybackEvent} from "../fastXml/playback";
+import {getBarsAndBeats, type PlaybackEvent} from "../fastXml/playback";
 
 export class Looper {
     canvas: HTMLCanvasElement;
@@ -198,7 +198,7 @@ export class Looper {
 
     populateNotes()
     {
-        this.playbackEvents = this.session.getSelectedPlaybackEvents();
+        this.playbackEvents = getBarsAndBeats(this.session.getAllPlaybackEvents());
 
         this.calculateRange();
         // this.measureBoundaries = computeMeasureBoundaries(musicXml,this.session.getTimeScale());
@@ -299,7 +299,7 @@ export class Looper {
         }
     }
 
-    private drawBarline(x: number, measureNumber: number) {
+    private drawBarline(x: number, name: string) {
         const ctx = this.ctx;
         const height = this.canvas.height;
 
@@ -315,7 +315,7 @@ export class Looper {
         ctx.fillStyle = "#555";
         ctx.font = "12px sans-serif";
         ctx.textBaseline = "top";
-        ctx.fillText(`M${measureNumber}`, x + 4, 4);
+        ctx.fillText(name, x + 4, 4);
     }
 
     private drawBeatTick(x: number) {
@@ -333,7 +333,7 @@ export class Looper {
             const x = (ev.timeSeconds - (currentTime - this.headOffset)) * this.getScale() - scrollX;
 
             if ("barline" in ev) {
-                this.drawBarline(x, ev.measureNumber);
+                this.drawBarline(x, ev.name);
             }
 
             if ("beat" in ev) {

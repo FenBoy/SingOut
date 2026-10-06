@@ -1,3 +1,5 @@
+import type {XmlAttributes, XmlDirection} from "../fastXml/helpers";
+
 export interface XmlScorePart {
     id: string;
     partName: string | null;
@@ -88,7 +90,8 @@ export type XmlMeasureEvent =
     | { type: "note", note: XmlNote }
     | { type: "backup", durationDiv: number }
     | { type: "forward", durationDiv: number }
-    | { type: "tempo", bpm: number };
+    | { type: "direction", direction: XmlDirection }
+    | { type: "attributes", attributes: XmlAttributes };
 
 export interface XmlJump {
     segno?: boolean;      // <segno/>

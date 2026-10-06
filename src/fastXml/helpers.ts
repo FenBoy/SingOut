@@ -57,7 +57,7 @@ export interface XmlMeasure {
     forward?: XmlForward | XmlForward[];
     direction?: XmlDirection | XmlDirection[];
     barline?: XmlBarline | XmlBarline[];
-    attributes?: XmlAttributes;
+    attributes?: XmlAttributes | XmlAttributes[];
 
     [key: string]: unknown;
 }
@@ -87,7 +87,7 @@ export interface XmlPitch {
 
 export interface XmlNote {
     pitch?: XmlPitch;
-    duration?: number;      // this is in quarter notes still
+    duration?: number;      // this is in quarter notes
     voice?: number | string;
     type?: string;
     lyric: XmlLyric | XmlLyric[];
@@ -108,9 +108,9 @@ export type XmlMeasureEvent =
     | { type: "note"; note: XmlNote }
     | { type: "backup"; backup: XmlBackup }
     | { type: "forward"; forward: XmlForward }
-    | { type: "direction"; direction: XmlDirection }
     | { type: "barline"; barline: XmlBarline }
-    | { type: "tempo"; tempo: XmlTempoEvent };
+    | { type: "direction"; direction: XmlDirection }
+    | { type: "attributes"; attributes: XmlAttributes };
 
 export interface XmlBackup {
     duration?: number;
@@ -123,26 +123,26 @@ export interface XmlForward {
 }
 
 
-export interface XmlSound {
-    "@_tempo"?: number | string;
-}
-
-export interface XmlDirection {
-    sound?: XmlSound;
-}
-
+// because we can get different types of barline
 export interface XmlBarline {
     [key: string]: unknown;
 }
 
-export interface XmlKey {
-    fifths: number | string;
-    mode?: string;
-}
+export interface XmlDirection {
+    sound?: {
+        "@_tempo"?: string;
+    };
 
-export interface XmlTime {
-    beats?: number | string | (number | string)[];
-    "beat-type"?: number | string | (number | string)[]; // has to be quotes as we want have hyphens in names
+    words?: string | {
+        "#text"?: string;
+    };
+
+    dynamics?: {
+        [mark: string]: unknown;
+    };
+
+    segno?: unknown;
+    coda?: unknown;
 }
 
 export interface XmlAttributes {
@@ -153,11 +153,106 @@ export interface XmlAttributes {
     [key: string]: unknown;
 }
 
-// Normalizers
-export function normalizeTime(raw: XmlTime | XmlTime[] | undefined): XmlTime[] {
+export function getDirectionBpm(direction: XmlDirection): number | undefined {
+    if (direction.sound && typeof direction.sound["@_tempo"] === "string") {
+        const bpm = Number(direction.sound["@_tempo"]);
+        return Number.isFinite(bpm) ? bpm : undefined;
+    }
+
+    return undefined;
+}
+
+export interface XmlKey {
+    fifths: number | string;
+    mode?: string;
+}
+
+export interface XmlTime {
+    beats?: number | string | (number | string)[];
+    "beat-type"?: number | string | (number | string)[];
+    symbol?: "common" | "cut";
+}
+
+export interface NormalizedTime {
+    beats: number;       // total beats (compound supported)
+    beatType: number;    // denominator
+    symbol?: "common" | "cut";
+}
+
+export function normalizeTime(raw: XmlTime | XmlTime[] | undefined): NormalizedTime[] {
+    if (!raw) {
+        // No <time> element → caller must fall back to previous measure
+        return [];
+    }
+
+    // MusicXML allows multiple <time> elements per measure
+    const timeElements: XmlTime[] = Array.isArray(raw) ? raw : [raw];
+
+    const result: NormalizedTime[] = [];
+
+    for (const t of timeElements) {
+
+        // Handle symbolic time signatures
+        if (t.symbol === "common") {
+            result.push({ beats: 4, beatType: 4, symbol: "common" });
+            continue;
+        }
+
+        if (t.symbol === "cut") {
+            result.push({ beats: 2, beatType: 2, symbol: "cut" });
+            continue;
+        }
+
+        // Extract beats
+        const beatsRaw = t.beats;
+        const beatTypeRaw = t["beat-type"];
+
+        // Normalize beats → array of numbers
+        let beatsArray: number[] = [];
+
+        if (Array.isArray(beatsRaw)) {
+            beatsArray = beatsRaw.map(b => Number(b));
+        } else if (beatsRaw !== undefined) {
+            beatsArray = [Number(beatsRaw)];
+        }
+
+        // Normalize beat-type → array of numbers
+        let beatTypeArray: number[] = [];
+
+        if (Array.isArray(beatTypeRaw)) {
+            beatTypeArray = beatTypeRaw.map(bt => Number(bt));
+        } else if (beatTypeRaw !== undefined) {
+            beatTypeArray = [Number(beatTypeRaw)];
+        }
+
+        // Handle compound signatures (e.g., 3/8 + 2/8)
+        const beats =
+            beatsArray.length > 0
+                ? beatsArray.reduce((sum, b) => sum + b, 0)
+                : 4; // fallback
+
+        const beatType =
+            beatTypeArray.length > 0
+                ? beatTypeArray[0] // MusicXML requires all beat-types to match
+                : 4; // fallback
+
+        result.push({ beats, beatType });
+    }
+
+    return result;
+}
+
+export function normalizeAttributes(raw: XmlAttributes | XmlAttributes[]) {
     if (!raw) return [];
     return Array.isArray(raw) ? raw : [raw];
 }
+
+export function normalizeDirection(raw: XmlDirection | XmlDirection[]) {
+    if (!raw) return [];
+    return Array.isArray(raw) ? raw : [raw];
+}
+
+// Normalizers
 export function normalizeKey(raw: XmlKey | XmlKey[] | undefined): XmlKey[] {
     if (!raw) return [];
     return Array.isArray(raw) ? raw : [raw];
@@ -322,65 +417,48 @@ export function getLyricText(note: XmlNote): string {
 export function getMeasureEvents(measureObj: XmlMeasure): XmlMeasureEvent[] {
     const events: XmlMeasureEvent[] = [];
 
-    // 1. direction (tempo) FIRST
-    if (measureObj.direction) {
-        const dirs = Array.isArray(measureObj.direction)
-            ? measureObj.direction
-            : [measureObj.direction];
+    for (const key of Object.keys(measureObj)) {
 
-        for (const d of dirs) {
-            if (d.sound && d.sound["@_tempo"] !== undefined) {
-                events.push({
-                    type: "tempo",
-                    tempo: { bpm: Number(d.sound["@_tempo"]) }
-                });
-            } else {
-                events.push({ type: "direction", direction: d });
+        if (key === "@_number") continue;
+
+        const value = measureObj[key];
+
+        const items = Array.isArray(value) ? value : [value];
+
+        for (const item of items) {
+            switch (key) {
+                case "attributes":
+                    events.push({ type: "attributes", attributes: item });
+                    break;
+
+                case "direction":
+                    events.push({ type: "direction", direction: item });
+                    break;
+
+                case "note":
+                    events.push({ type: "note", note: item });
+                    break;
+
+                case "backup":
+                    events.push({ type: "backup", backup: item });
+                    break;
+
+                case "forward":
+                    events.push({ type: "forward", forward: item });
+                    break;
+
+                case "barline":
+                    events.push({ type: "barline", barline: item });
+                    break;
+
+                default:
+                    // ignore unknown keys
+                    break;
             }
         }
     }
 
-    // 2. notes
-    if (measureObj.note) {
-        const notes = Array.isArray(measureObj.note)
-            ? measureObj.note
-            : [measureObj.note];
-        for (const n of notes) events.push({ type: "note", note: n });
-    }
-
-    // 3. backup
-    if (measureObj.backup) {
-        const backups = Array.isArray(measureObj.backup)
-            ? measureObj.backup
-            : [measureObj.backup];
-        for (const b of backups) events.push({ type: "backup", backup: b });
-    }
-
-    // 4. forward
-    if (measureObj.forward) {
-        const forwards = Array.isArray(measureObj.forward)
-            ? measureObj.forward
-            : [measureObj.forward];
-        for (const f of forwards) events.push({ type: "forward", forward: f });
-    }
-
-    // 5. barline
-    if (measureObj.barline) {
-        const bars = Array.isArray(measureObj.barline)
-            ? measureObj.barline
-            : [measureObj.barline];
-        for (const b of bars) events.push({ type: "barline", barline: b });
-    }
-
     return events;
-}
-
-
-export function getDivisions(measure: XmlMeasure): number {
-    const attrs = measure.attributes;
-    if (!attrs) return 1;
-
-    return attrs.divisions ?? 1;
 }
 
 export function getPartIndexFromScore(
@@ -393,31 +471,6 @@ export function getPartIndexFromScore(
 
     const partList = normalizeScoreParts(score);
     return partList.findIndex(p => p["@_id"] === selected["@_id"]);
-}
-
-export function getStartingKey(score: XmlScorePartwise | null): XmlKey | null {
-    if(score == null) return { fifths: 0, mode: "major"};
-    const parts = normalizeScoreParts(score);
-    if (parts.length === 0) return null;
-
-    const firstPart = parts[0];
-
-    const measures = normalizeMeasures(firstPart.measure);
-    if (measures.length === 0) return null;
-
-    const firstMeasure = measures[0];
-    const attrs = firstMeasure.attributes;
-    if (!attrs || !attrs.key) return null;
-
-    const keys = normalizeKey(attrs.key);
-    if (keys.length === 0) return null;
-
-    const key = keys[0];
-
-    return {
-        fifths: Number(key.fifths),
-        mode: key.mode ?? "major"
-    };
 }
 
 export function xmlPitchToMidi(p: XmlPitch | null | undefined): number {

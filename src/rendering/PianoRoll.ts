@@ -1,6 +1,12 @@
 import {PlaySession} from "../audio/PlaySession";
-import {getLyricText, getStartingKey, type XmlPitch, xmlPitchToMidi} from "../fastXml/helpers";
-import {getPlaybackNoteAtTime, isPlaybackNote, type PlaybackEvent, type PlaybackNote} from "../fastXml/playback";
+import {getLyricText,xmlPitchToMidi} from "../fastXml/helpers";
+import {
+    getPlaybackNoteAtTime,
+    getStartingKeyFromPlayback,
+    isPlaybackNote,
+    type PlaybackEvent,
+    type PlaybackNote
+} from "../fastXml/playback";
 import {freqToCents, freqToMidi, midiToFreq} from "../midi/midiUtils";
 import {buildScale, pitchClassFromFifths} from "../midi/musicXmlUtils";
 
@@ -319,10 +325,9 @@ export class PianoRoll {
 
     populateNotes()
     {
-        const score = this.session.getReferenceMusicXml();
         this.playbackEvents = this.session.getSelectedPlaybackEvents();
 
-        const firstKey = getStartingKey(score);
+        const firstKey = getStartingKeyFromPlayback(this.playbackEvents);
         if(!firstKey?.fifths || !firstKey?.mode) return;
 
         this.tonicPc = pitchClassFromFifths(firstKey.fifths);
@@ -486,7 +491,7 @@ export class PianoRoll {
 
         for (const ev of this.playbackEvents) {
             if (isPlaybackNote(ev)) {
-                const noteStart = ev.timeSeconds;
+                // const noteStart = ev.timeSeconds;
                 const noteEnd   = ev.timeSeconds + ev.durationSeconds;
 
 // Show notes that haven't finished yet

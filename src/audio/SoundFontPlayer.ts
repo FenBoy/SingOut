@@ -100,7 +100,7 @@ export interface ISoundFontInstrument {
 export class InstrumentBank {
     private ac: AudioContext | null = null;
     private cache: Map<string, ISoundFontInstrument> = new Map();
-    private partInstruments: Map<number, ISoundFontInstrument> = new Map();
+    private partInstruments: Map<string, ISoundFontInstrument> = new Map();
 
     private hasAudioContext = false;
 
@@ -111,7 +111,7 @@ export class InstrumentBank {
         return this.ac;
     }
 
-    async loadInstrumentForPart(partIndex: number, gmName: InstrumentName) {
+    async loadInstrumentForPart(partIndex: string, gmName: InstrumentName) {
 
         // this needs to happen in response to a user interaction
         if(!this.hasAudioContext)
@@ -147,13 +147,19 @@ export class InstrumentBank {
         this.partInstruments.set(partIndex, inst);
     }
 
-    getInstrument(partIndex: number): ISoundFontInstrument | undefined {
-        return this.partInstruments.get(partIndex);
+    getInstrument(id: string): ISoundFontInstrument | undefined {
+        return this.partInstruments.get(id);
     }
 
     now(): number {
         if(!this.ac) return 0;
         return this.ac.currentTime;
+    }
+
+    getDefaultInstrument(): ISoundFontInstrument | undefined {
+        // Map preserves insertion order, so the first entry is the first loaded instrument
+        const first = this.partInstruments.values().next();
+        return first.done ? undefined : first.value;
     }
 }
 
@@ -163,8 +169,8 @@ export class SoundFontPlayer implements IPlayer {
     private isPlaying = false;
     private lastTime = 0;
 
-    private notes: PlaybackEvent[][] = [];
-    private noteIndex = 0;
+    private notes: PlaybackEvent[] = [];
+    private cursor: number = 0;
 
     constructor(
         private session: PlaySession,
@@ -179,7 +185,7 @@ export class SoundFontPlayer implements IPlayer {
 
     private populateNotes() {
         this.notes = this.session.getAllPlaybackEvents();
-        this.noteIndex = 0;
+        this.cursor = 0;
         this.lastTime = 0;
     }
 
@@ -187,20 +193,13 @@ export class SoundFontPlayer implements IPlayer {
         return this.isPlaying;
     }
 
-    private recalcNoteIndex(now: number) {
-        let lo = 0;
-        let hi = this.notes[0].length - 1;
-
-        while (lo <= hi) {
-            const mid = (lo + hi) >> 1;
-            if (this.notes[0][mid].timeSeconds < now) {
-                lo = mid + 1;
-            } else {
-                hi = mid - 1;
+    // ⭐ Reset all part indexes when seeking backwards
+    private repositionCursor(now: number) {
+            let i = 0;
+            while (i < this.notes.length && this.notes[i].timeSeconds < now) {
+                i++;
             }
-        }
-
-        this.noteIndex = lo;
+            this.cursor = i;
     }
 
     play() {
@@ -214,7 +213,7 @@ export class SoundFontPlayer implements IPlayer {
 
             // Seeking backwards
             if (now < this.lastTime) {
-                this.recalcNoteIndex(now);
+                this.repositionCursor(now);
             }
 
             this.lastTime = now;
@@ -233,45 +232,29 @@ export class SoundFontPlayer implements IPlayer {
                 return;
             }
 
-            // ⭐ EXACT SAME MODEL: part 0 only
-            const events = this.notes[0];
-            const inst = this.session.instrumentBank.getInstrument(0);
+            while (
+                this.cursor < this.notes.length &&
+                this.notes[this.cursor].timeSeconds <= now
+                ) {
+                const ev = this.notes[this.cursor];
 
-            if (inst) {
-                while (
-                    this.noteIndex < events.length &&
-                    events[this.noteIndex].timeSeconds <= now
-                    ) {
-                    const ev = events[this.noteIndex];
+                if (isPlaybackNote(ev) && ev.note.pitch !== null) {
+                    const midi = xmlPitchToMidi(ev.note.pitch);
 
-                    if (isPlaybackNote(ev) && ev.note.pitch !== null) {
-                        const midi = xmlPitchToMidi(ev.note.pitch);
+                    const inst = this.instrumentBank.getInstrument(ev.id);
 
-                        // EXACT SAME SCHEDULING MODEL
-                        const start = this.session.instrumentBank.now() +
-                            (ev.timeSeconds - now);
+                    if (!inst) continue;
 
-                        console.log("instrument", inst);
+                    const start = this.instrumentBank.now() +
+                        (ev.timeSeconds - now);
 
-                        console.log(
-                            "AudioContext state:",
-                            this.session.instrumentBank.getAudioContext()?.state ?? "no context"
-                        );
-
-                        console.log("start:", start, "ctx:", this.ac.currentTime);
-
-                        inst.play(midi, start, {
-                            duration: ev.durationSeconds,
-                            gain: 0.8 // ev.velocity ?? 0.8
-                        });
-
-                        console.log(
-                            `t: ${now} midi ${xmlPitchToMidi(ev.note.pitch)} dur ${ev.durationSeconds}`
-                        );
-                    }
-
-                    this.noteIndex++;
+                    inst.play(midi, start, {
+                        duration: ev.durationSeconds,
+                        gain: 0.8 // ev.velocity ?? 0.8
+                    });
                 }
+
+                this.cursor++;
             }
 
             this.timer = setTimeout(tick, 10);
@@ -280,10 +263,9 @@ export class SoundFontPlayer implements IPlayer {
         tick();
     }
 
-
     seek(time: number) {
-        const idx = this.notes[0].findIndex(n => n.timeSeconds >= time);
-        this.noteIndex = idx === -1 ? this.notes[0].length : idx;
+        // ⭐ Reset all part indexes on seek
+        this.repositionCursor(time);
 
         if (this.isPlaying) {
             this.play();

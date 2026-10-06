@@ -6,14 +6,14 @@ import JSZip from "jszip";
 import {TonePlayer} from "./TonePlayer";
 import {getPartList, getTitle, type XmlScorePartwise} from "../fastXml/helpers";
 import {
-    buildScorePlayback,
-    getPlaybackForPart,
+    getEventsForPart, getPlayback,
     getPlaybackScoreLengthSeconds,
     getStartingTempoFromPlayback, type PlaybackEvent
 } from "../fastXml/playback";
 import { XMLParser } from "fast-xml-parser";
 import {type AudioChannel, buildScoreChannels} from "../fastXml/channels";
 import {InstrumentBank, resolveInstrumentName, SoundFontPlayer} from "./SoundFontPlayer";
+import {getMergedTimeline} from "../fastXml/timeline";
 
 export const BASE_URL = "https://raw.githubusercontent.com/FenBoy/GlobalVoices/main";
 
@@ -109,7 +109,7 @@ export class PlaySession {
     // this will be the MusicXml data converted into
     // concrete classes
     private referenceScore: XmlScorePartwise | null = null;
-    private playbackEvents:PlaybackEvent[][] = [];
+    private playbackEvents:PlaybackEvent[] = [];
 
     // stored here for visualisation
     private backingFormat: MusicFormat = MusicFormat.None;
@@ -189,12 +189,13 @@ export class PlaySession {
     getSelectedPlaybackEvents() : PlaybackEvent[] {
         if(this.selectedChannel >= 0 && this.channels.length > this.selectedChannel)
         {
-            return getPlaybackForPart(this.playbackEvents,this.referenceScore, this.channels[this.selectedChannel].part);
+            const part = this.channels[this.selectedChannel].part;
+            return getEventsForPart(this.playbackEvents, part["@_id"]);
         }
         return [];
     }
 
-    getAllPlaybackEvents(): PlaybackEvent[][] {
+    getAllPlaybackEvents(): PlaybackEvent[] {
         return this.playbackEvents;
     }
 
@@ -230,7 +231,7 @@ export class PlaySession {
         return this.referenceScore;
     }
 
-    getPlaybackEvents() : PlaybackEvent[][] {
+    getPlaybackEvents() : PlaybackEvent[] {
         return this.playbackEvents;
     }
 
@@ -274,13 +275,12 @@ export class PlaySession {
         this.currentTempo = this.startTempo;
     }
 
-    async loadInstruments(score:XmlScorePartwise)
-    {
+    async loadInstruments(score: XmlScorePartwise) {
         const scoreParts = getPartList(score);
 
-        for (let i = 0; i < scoreParts.length; i++) {
-            const gmName = resolveInstrumentName(scoreParts[i]);
-            await this.instrumentBank.loadInstrumentForPart(i, gmName);
+        for (const part of scoreParts) {
+            const gmName = resolveInstrumentName(part);
+            await this.instrumentBank.loadInstrumentForPart(part["@_id"], gmName);
         }
     }
 
@@ -333,7 +333,8 @@ export class PlaySession {
         // this.referenceScore = createMidiScore(expanded);
         this.referenceScore = xml;
         this.trackTitle = getTitle(xml);
-        this.playbackEvents = buildScorePlayback(this.referenceScore, 480);
+        const timeLine = getMergedTimeline(xml);
+        this.playbackEvents = getPlayback(timeLine);
         this.channels = buildScoreChannels(this.referenceScore);
         this.populatePlayData();
         await this.loadInstruments(xml);
@@ -530,7 +531,7 @@ export class PlaySession {
     }
 
     playMidi(midi: number) {
-        const inst = this.instrumentBank.getInstrument(0);
+        const inst = this.instrumentBank.getDefaultInstrument();
         if(inst)
         {
             inst.play(midi, this.instrumentBank.now(), {

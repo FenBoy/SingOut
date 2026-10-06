@@ -1,7 +1,16 @@
 import {
-    buildScoreTimelines, type TimelineEvent
+    type TimelineMeasure
 } from "./timeline";
-import {getLyricText, getPartIndexFromScore, type XmlNote, type XmlScorePart, type XmlScorePartwise} from "./helpers";
+import {
+    getDirectionBpm,
+    getLyricText, normalizeKey,
+    type XmlNote,
+} from "./helpers";
+import {TimeAttributes} from "./timeAttributes";
+
+
+// the tick resolution
+export const PPQ = 480;
 
 // for processing the timeline in order
 // and applying tempo changes
@@ -21,6 +30,7 @@ export interface PlaybackNote extends PlaybackBase {
     durationSeconds: number;
     note: XmlNote;
     performance: Performance;
+    id: string; // part id
 }
 
 export interface PlaybackTempo extends PlaybackBase {
@@ -28,7 +38,7 @@ export interface PlaybackTempo extends PlaybackBase {
 }
 
 export interface PlaybackBarline extends PlaybackBase {
-    measureNumber: number;
+    name: string;
     barline: true;
 }
 
@@ -70,120 +80,19 @@ export function isKeyChange(ev: PlaybackEvent): ev is PlaybackKeyChange{
     return "keyChange" in ev;
 }
 
-export function applyTempoToTimeline(
-    timeline: TimelineEvent[],
-    ppq: number
-): PlaybackEvent[] {
-
-    // Ensure events are sorted by tick
-    const sorted = [...timeline].sort((a, b) => a.tick - b.tick);
-
-    const playback: PlaybackEvent[] = [];
-
-    let currentBpm = 120; // default if no tempo yet
-    let lastTick = 0;
-    let lastTimeSeconds = 0;
-
-    for (const ev of sorted) {
-
-        // Convert tick delta → seconds delta
-        const tickDelta = ev.tick - lastTick;
-        const secondsPerTick = (60 / currentBpm) / ppq;
-        const timeDelta = tickDelta * secondsPerTick;
-
-        const eventTimeSeconds = lastTimeSeconds + timeDelta;
-
-        // ⭐ PlaybackNote
-        if ("note" in ev) {
-            const rawDiv = ev.note.duration;
-            const durationSeconds =
-                typeof rawDiv === "number"
-                    ? (rawDiv / ev.divisions) * (60 / currentBpm)
-                    : 0;
-
-            playback.push({
-                timeSeconds: eventTimeSeconds,
-                durationSeconds,
-                note: ev.note,
-                performance: { hit: false }
-            });
-        }
-
-
-        // ⭐ PlaybackTempo
-        else if ("bpm" in ev) {
-            currentBpm = ev.bpm;
-            playback.push({
-                timeSeconds: eventTimeSeconds,
-                bpm: ev.bpm
-            });
-        }
-
-        // ⭐ PlaybackBarline
-        else if ("barline" in ev) {
-            playback.push({
-                timeSeconds: eventTimeSeconds,
-                measureNumber: ev.measureNumber,
-                barline: true
-            });
-        }
-
-        // ⭐ PlaybackBeat
-        else if ("beat" in ev) {
-            playback.push({
-                timeSeconds: eventTimeSeconds,
-                beatNumber: ev.beatNumber,
-                beat: true
-            });
-        }
-
-        // ⭐ PlaybackKeyChange
-        else if ("keyChange" in ev) {
-            playback.push({
-                timeSeconds: eventTimeSeconds,
-                fifths: ev.fifths,
-                mode: ev.mode,
-                keyChange: true
-            });
-        }
-
-        // Update running state
-        lastTick = ev.tick;
-        lastTimeSeconds = eventTimeSeconds;
-    }
-
-    return playback;
-}
-
-
-export function buildScorePlayback(
-    score: XmlScorePartwise | null,
-    ppq: number
-): PlaybackEvent[][] {
-    if(score == null) return [];
-
-    const partTimelines = buildScoreTimelines(score, ppq);
-
-    return partTimelines.map(timeline =>
-        applyTempoToTimeline(timeline, ppq)
-    );
-}
-
 export function getPlaybackScoreLengthSeconds(
-    playback: PlaybackEvent[][]
+    playback: PlaybackEvent[]
 ): number {
     let maxSeconds = 0;
 
-    for (const part of playback) {
-        for (const ev of part) {
-            if (isPlaybackNote(ev)) {
-                const raw = ev.durationSeconds;
-                const duration = typeof raw === "number" ? raw : 0;
-                const end = ev.timeSeconds + duration;
+    for (const ev of playback) {
+        if (isPlaybackNote(ev)) {
+            const raw = ev.durationSeconds;
+            const duration = typeof raw === "number" ? raw : 0;
+            const end = ev.timeSeconds + duration;
 
-                if (end > maxSeconds) {
-                    maxSeconds = end;
-                }
+            if (end > maxSeconds) {
+                maxSeconds = end;
             }
         }
     }
@@ -191,45 +100,36 @@ export function getPlaybackScoreLengthSeconds(
     return maxSeconds;
 }
 
-export function getStartingTempoFromPlayback(
-    playback: PlaybackEvent[][]
-): number {
-    let firstTempo: number | null = null;
-
-    for (const part of playback) {
-        for (const ev of part) {
-            if ("bpm" in ev) {
-                if (firstTempo === null || ev.timeSeconds < firstTempo) {
-                    firstTempo = ev.bpm;
-                }
-            }
-        }
-    }
-
-    return firstTempo ?? 120; // fallback if no tempo found
-}
-
-export function getPlaybackForPart(
-    playback: PlaybackEvent[][],
-    score: XmlScorePartwise | null,
-    selected: XmlScorePart | null
+export function getEventsForPart(
+    playback: PlaybackEvent[],
+    id: string
 ): PlaybackEvent[] {
-
-    if(score == null || selected == null) return [];
-
-    const index = getPartIndexFromScore(score, selected);
-    return index >= 0 ? playback[index] : [];
+    return playback.filter(ev =>
+        ("id" in ev && ev.id === id) || ("keyChange" in ev) || (("bpm" in ev))
+    );
 }
 
+export function getBarsAndBeats(
+    playback: PlaybackEvent[]
+): (PlaybackBeat | PlaybackBarline)[] {
+    return playback.filter((ev): ev is PlaybackBeat | PlaybackBarline =>
+        ("beat" in ev) || ("barline" in ev)
+    );
+}
+
+// Note: the following methods are used for displaying data
+// about the current part (the part being practised)
+// in the PianoRoll. The events have already been filtered
+// so we don't need to filter for a matching part id
 export function getPlaybackNoteAtTime(
     playback: PlaybackEvent[],
     t: number
 ): PlaybackNote | null {
     const ev = playback.find(
-        (e): e is PlaybackNote =>
-            isPlaybackNote(e) &&
-            t >= e.timeSeconds &&
-            t < e.timeSeconds + e.durationSeconds
+        (ev): ev is PlaybackNote =>
+            isPlaybackNote(ev) &&
+            t >= ev.timeSeconds &&
+            t < ev.timeSeconds + ev.durationSeconds
     );
 
     return ev ?? null;
@@ -253,4 +153,153 @@ export function getApproachingLyrics(
         )
         .map(ev => getLyricText(ev.note))
         .filter(Boolean);
+}
+
+
+// back to things that apply to all parts
+
+export function getStartingTempoFromPlayback(
+    playback: PlaybackEvent[]
+): number {
+
+    if (playback.length === 0) {
+        return 120;
+    }
+
+    const startTime = playback[0].timeSeconds;
+
+    // Scan all events at the starting time
+    for (let i = 0; i < playback.length && playback[i].timeSeconds === startTime; i++) {
+        const ev = playback[i];
+        if (isPlaybackTempo(ev)) {
+            return ev.bpm;
+        }
+    }
+
+    return 120;
+}
+
+export function getStartingKeyFromPlayback(
+    playback: PlaybackEvent[]
+): PlaybackKeyChange {
+
+    if (playback.length > 0) {
+        const startTime = playback[0].timeSeconds;
+
+        // Scan all events at the starting time
+        for (let i = 0; i < playback.length && playback[i].timeSeconds === startTime; i++) {
+            const ev = playback[i];
+            if ("keyChange" in ev) {
+                return ev;
+            }
+        }
+    }
+
+    // Default: C major
+    return {
+        timeSeconds: 0,
+        keyChange: true,
+        fifths: 0,
+        mode: "major"
+    };
+}
+
+export function getPlayback(timeline:TimelineMeasure[]): PlaybackEvent[]
+{
+    const playBackEvents:PlaybackEvent[] = [];
+
+    let bpm = 120;
+    let secondsPerQN = 60 / bpm;
+
+    const timeAttributes = new TimeAttributes();
+    let measureStartQN: number = 0;
+    let currentTimeSeconds: number = 0;
+
+    for (const measure of timeline) {
+        const measureEvents:PlaybackEvent[] = [];
+
+        // barline at start
+        measureEvents.push({
+            name:measure.name,
+            timeSeconds: currentTimeSeconds,
+            barline: true
+        });
+
+        // process the notes and any changes
+        for (const ev of measure.events) {
+            const eventQN = measureStartQN + ev.qnOffset;
+            const eventTimeSeconds = eventQN * secondsPerQN;
+
+            if ("attributes" in ev) {
+                timeAttributes.updateFromAttributes(ev.attributes);
+
+                // add an entry to represent key changes
+                const keys = normalizeKey(ev.attributes.key)
+                if (keys.length > 0) {
+                    const key = keys[0];
+
+                    const currentKey = {
+                        fifths: Number(key.fifths),
+                        mode: key.mode ?? "major"
+                    };
+
+                    measureEvents.push({
+                        timeSeconds: eventTimeSeconds,
+                        keyChange: true,
+                        fifths: currentKey.fifths,
+                        mode: currentKey.mode
+                    });
+                }
+            }
+
+            if ("direction" in ev) {
+                const newBpm = getDirectionBpm(ev.direction);
+                if (newBpm) {
+                    bpm = newBpm;
+                    secondsPerQN = 60 / bpm;
+                }
+            }
+
+            if ("note" in ev) {
+                const durQN = ev.note.duration;
+                let durationSeconds = 0;
+                if(durQN) {
+                    durationSeconds = durQN * secondsPerQN;
+                }
+                measureEvents.push({
+                    timeSeconds: eventTimeSeconds,
+                    durationSeconds: durationSeconds,
+                    note: ev.note,
+                    id: ev.id,
+                    performance: {hit: false}
+                });
+            }
+        }
+
+        // 3. NOW generate beats (after processing events)
+        const time = timeAttributes.time[0];
+        const beatQN = 4 / time.beatType;
+
+        for (let beatIndex = 0; beatIndex < time.beats; beatIndex++) {
+            const beatQNOffset = beatIndex * beatQN;
+            const beatTimeSeconds = (measureStartQN + beatQNOffset) * secondsPerQN;
+
+            measureEvents.push({
+                beat: true,
+                beatNumber: beatIndex + 1,
+                timeSeconds: beatTimeSeconds
+            });
+        }
+
+        // 4. Sort measure events
+        measureEvents.sort((a, b) => a.timeSeconds - b.timeSeconds);
+
+        // append them to the end
+        playBackEvents.push(...measureEvents);
+
+        // advance for next measure
+        measureStartQN += timeAttributes.getMeasureLengthQN();
+        currentTimeSeconds = measureStartQN * secondsPerQN;
+    }
+    return playBackEvents;
 }
