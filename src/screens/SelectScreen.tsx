@@ -9,11 +9,11 @@ export function SelectScreen({
     session: PlaySession;
     onGo: () => void;
 }) {
-    // ⭐ React does NOT track changes inside session, so we trigger a re-render manually
+    // React does NOT track changes inside session, so we trigger a re-render manually
     const [, forceUpdate] = useState(0);
 
     const channels = session.getChannels();
-    const selectedIndex = session.getSelectedChannelIndex();
+    const selectedId = session.getSelectedPartId();   // ⭐ now ID-based
 
     return (
         <div style={{
@@ -48,25 +48,25 @@ export function SelectScreen({
 
                 <PartSelector
                     channels={channels}
-                    selectedIndex={selectedIndex}
-                    onSelect={(index) => {
-                        session.setSelectedChannelIndex(index);
-                        forceUpdate(x => x + 1);   // ⭐ trigger re-render
+                    selectedId={selectedId}
+                    onSelect={(id) => {
+                        session.setSelectedPartId(id);   // ⭐ store ID
+                        forceUpdate(x => x + 1);         // ⭐ trigger re-render
                     }}
                 />
 
                 <button
                     onClick={onGo}
-                    disabled={selectedIndex === -1}
+                    disabled={!selectedId}
                     style={{
                         marginTop: '20px',
                         padding: '12px 20px',
                         fontSize: '16px',
                         borderRadius: '6px',
                         border: 'none',
-                        background: selectedIndex !== -1 ? '#0077ff' : '#ccc',
+                        background: selectedId ? '#0077ff' : '#ccc',
                         color: 'white',
-                        cursor: selectedIndex !== -1 ? 'pointer' : 'not-allowed'
+                        cursor: selectedId ? 'pointer' : 'not-allowed'
                     }}
                 >
                     Go
@@ -75,6 +75,7 @@ export function SelectScreen({
         </div>
     );
 }
+
 
 
 

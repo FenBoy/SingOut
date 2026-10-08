@@ -11,9 +11,10 @@ import {
     getStartingTempoFromPlayback, type PlaybackEvent
 } from "../fastXml/playback";
 import { XMLParser } from "fast-xml-parser";
-import {type AudioChannel, buildScoreChannels} from "../fastXml/channels";
-import {InstrumentBank, resolveInstrumentName, SoundFontPlayer} from "./SoundFontPlayer";
+import {type AudioChannel} from "../fastXml/channels";
 import {getMergedTimeline} from "../fastXml/timeline";
+import {InstrumentBank, type ISoundFontInstrument, resolveInstrumentName} from "./instrumentBank";
+import {ClockedPlayer} from "./ClockedPlayer";
 
 export const BASE_URL = "https://raw.githubusercontent.com/FenBoy/GlobalVoices/main";
 
@@ -115,8 +116,7 @@ export class PlaySession {
     private backingFormat: MusicFormat = MusicFormat.None;
     private backingAudio: AudioBuffer | null = null;
 
-    // re-enable
-    private selectedChannel : number = -1;
+    private selectedPartId: string | null = null;
 
     private trackTitle : string = "";
     private player :IPlayer | null = null;
@@ -178,18 +178,23 @@ export class PlaySession {
         this.channels = channels;
     }
 
-    setSelectedChannelIndex(index:number) {
-        this.selectedChannel = index;
+    getSelectedPartId(): string | null {
+        return this.selectedPartId;
     }
 
-    getSelectedChannelIndex(): number {
-        return this.selectedChannel;
+    setSelectedPartId(id: string) {
+        this.selectedPartId = id;
+    }
+
+    getSelectedChannel(): AudioChannel | undefined {
+        if (!this.selectedPartId) return undefined;
+        return this.channels.find(ch => ch.part["@_id"] === this.selectedPartId);
     }
 
     getSelectedPlaybackEvents() : PlaybackEvent[] {
-        if(this.selectedChannel >= 0 && this.channels.length > this.selectedChannel)
-        {
-            const part = this.channels[this.selectedChannel].part;
+        const channel = this.getSelectedChannel();
+        if(channel) {
+            const part = channel.part;
             return getEventsForPart(this.playbackEvents, part["@_id"]);
         }
         return [];
@@ -204,11 +209,14 @@ export class PlaySession {
         return this.trackTitle;
     }
 
-    getChannelTitle() {
-        const channel = this.channels[this.selectedChannel];
-        const pn = channel.part.partName;
-        if (pn != null) return pn;
-        return this.selectedChannel.toString();
+    getSelectedChannelTitle() {
+        const channel = this.getSelectedChannel();
+        if(channel)
+        {
+            const pn = channel.part.partName;
+            if (pn != null) return pn;
+        }
+        return "";
     }
 
 
@@ -217,6 +225,11 @@ export class PlaySession {
         this.mic = new Mic();
         this.results = new Results();
         this.instrumentBank = new InstrumentBank();
+    }
+
+    ensureAudioContext()
+    {
+        this.instrumentBank.ensureAudioContext();
     }
 
     getResults(): Results {
@@ -275,12 +288,50 @@ export class PlaySession {
         this.currentTempo = this.startTempo;
     }
 
-    async loadInstruments(score: XmlScorePartwise) {
+    async loadChannels(score: XmlScorePartwise) {
         const scoreParts = getPartList(score);
+
+        const channels: AudioChannel[] = [];
 
         for (const part of scoreParts) {
             const gmName = resolveInstrumentName(part);
-            await this.instrumentBank.loadInstrumentForPart(part["@_id"], gmName);
+
+            const loaded = await this.instrumentBank.loadInstrumentForPart(gmName);
+            if (!loaded) continue;
+
+            const { inst, gain, pan } = loaded;
+
+            if(inst && gain && pan) {
+                const channel: AudioChannel = {
+                    part,
+                    inst,
+                    gain,
+                    panNode: pan
+                };
+                channels.push(channel);
+            }
+        }
+
+        this.channels = channels;
+    }
+
+    getInstrumentForPart(id: string): ISoundFontInstrument | null {
+        const ch = this.channels.find(c => c.part["@_id"] === id);
+        return ch ? ch.inst : null;
+    }
+
+    getKey(): string {
+        return "add key signature"  // however you store it
+    }
+
+    getChannel(id: string) : AudioChannel | undefined
+    {
+        return this.channels.find(c => c.part["@_id"] === id);
+    }
+
+    stopAllInstruments(): void {
+        for (const ch of this.channels) {
+            ch.inst.stop();
         }
     }
 
@@ -324,7 +375,8 @@ export class PlaySession {
             // add this back with new XmlScorePartwise
             // this.setBackingParts(this.referenceScore.partInfo);
             // this.player = new TonePlayer(this, this.playHead);
-            this.player = new SoundFontPlayer(this, this.playHead, this.instrumentBank);
+            // this.player = new SoundFontPlayer(this, this.playHead, this.instrumentBank);
+            this.player = new ClockedPlayer(this, this.playHead, this.instrumentBank);
         }
     }
 
@@ -335,9 +387,9 @@ export class PlaySession {
         this.trackTitle = getTitle(xml);
         const timeLine = getMergedTimeline(xml);
         this.playbackEvents = getPlayback(timeLine);
-        this.channels = buildScoreChannels(this.referenceScore);
         this.populatePlayData();
-        await this.loadInstruments(xml);
+        await this.instrumentBank.loadDefaultInstrument();
+        await this.loadChannels(xml);
         this.trackReady = true;
     }
 
@@ -536,7 +588,7 @@ export class PlaySession {
         {
             inst.play(midi, this.instrumentBank.now(), {
                 duration: 1,
-                gain: 0.8 // ev.velocity ?? 0.8
+                gain: 0.8       // fairly high
             });
         }
     }
@@ -559,14 +611,10 @@ export class PlaySession {
         {
             this.player.play();
         }
-
-        this.playHead.start();
-        //this.results.resetScore();
     }
 
     pause()
     {
-        this.playHead.stop();
         if(this.player) this.player.pause();
     }
 
@@ -574,7 +622,7 @@ export class PlaySession {
     {
         if(time < 0)
         {
-            this.playHead.seek(0);
+            this.playHead.setCurrentTime(0);
             if(this.player) this.player.seek(0);
             if(this.visualiser) this.visualiser.seek(0);
             return;
@@ -583,13 +631,13 @@ export class PlaySession {
         const maxTime = this.playHead.getMaxTime();
         if(time > maxTime)
         {
-            this.playHead.seek(maxTime);
+            this.playHead.setCurrentTime(maxTime);
             if(this.player) this.player.seek(maxTime);
             if(this.visualiser) this.visualiser.seek(maxTime);
             return;
         }
 
-        this.playHead.seek(time);
+        this.playHead.setCurrentTime(time);
         if(this.player) this.player.seek(time);
         if(this.visualiser) this.visualiser.seek(time);
     }
@@ -597,6 +645,5 @@ export class PlaySession {
     // called from the player
     playComplete()
     {
-
     }
 }

@@ -84,7 +84,7 @@ export function PlayScreen({
                 {session.isTrackReady() ? (
                     <>
                         <h2>{session.getTrackTitle()}</h2>
-                        <h2>{session.getChannelTitle()}</h2>
+                        <h2>{session.getSelectedChannelTitle()}</h2>
                     </>
                 ) : (
                     <h2>Loading track…</h2>

@@ -64,6 +64,10 @@ export function isPlaybackNote(ev: PlaybackEvent): ev is PlaybackNote {
     return "note" in ev;
 }
 
+export function hasPitch(ev: PlaybackNote): boolean {
+    return ev.note.pitch !== undefined && ev.note.rest !== true;
+}
+
 export function isPlaybackTempo(ev: PlaybackEvent): ev is PlaybackTempo {
     return "bpm" in ev;
 }
@@ -215,6 +219,8 @@ export function getPlayback(timeline:TimelineMeasure[]): PlaybackEvent[]
     let measureStartQN: number = 0;
     let currentTimeSeconds: number = 0;
 
+    const partState: Record<string, { divisions: number }> = {};
+
     for (const measure of timeline) {
         const measureEvents:PlaybackEvent[] = [];
 
@@ -227,11 +233,24 @@ export function getPlayback(timeline:TimelineMeasure[]): PlaybackEvent[]
 
         // process the notes and any changes
         for (const ev of measure.events) {
-            const eventQN = measureStartQN + ev.qnOffset;
+
+            // make sure we have divisions for this part
+            if (!(ev.id in partState)) {
+                partState[ev.id] = { divisions: 1 };
+            }
+
+            const divisions = partState[ev.id].divisions;
+
+            const eventQN = measureStartQN + (ev.qnOffset / divisions);
             const eventTimeSeconds = eventQN * secondsPerQN;
 
             if ("attributes" in ev) {
                 timeAttributes.updateFromAttributes(ev.attributes);
+
+                // keep track of divisions for each part
+                if (ev.attributes.divisions !== undefined) {
+                    partState[ev.id].divisions = ev.attributes.divisions;
+                }
 
                 // add an entry to represent key changes
                 const keys = normalizeKey(ev.attributes.key)
@@ -261,11 +280,14 @@ export function getPlayback(timeline:TimelineMeasure[]): PlaybackEvent[]
             }
 
             if ("note" in ev) {
-                const durQN = ev.note.duration;
+                const divisionsForPart = partState[ev.id].divisions;
+
                 let durationSeconds = 0;
-                if(durQN) {
-                    durationSeconds = durQN * secondsPerQN;
+                if (typeof ev.note.duration === "number") {
+                    const durationQN = ev.note.duration / divisionsForPart;
+                    durationSeconds = durationQN * secondsPerQN;
                 }
+
                 measureEvents.push({
                     timeSeconds: eventTimeSeconds,
                     durationSeconds: durationSeconds,

@@ -22,6 +22,8 @@ export default function App() {
                 tracks={tracks}
                 onSelectSession={async (track) => {
                     const s = new PlaySession();
+                    // ⭐ MUST happen synchronously inside the click
+                    s.ensureAudioContext();
                     await s.loadTrack(track);
                     setSession(s);
                     setScreen('part');

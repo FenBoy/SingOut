@@ -581,8 +581,17 @@ export class PianoRoll {
 
                         const lyricText = getLyricText(ev.note);
 
-                        ctx.fillStyle = "white";
-                        ctx.font = `${8 * this.noteScale}px sans-serif`;
+                        if(isActive)
+                        {
+                            ctx.fillStyle = "black";
+                            ctx.font = `${12 * this.noteScale}px sans-serif`;
+                        }
+                        else
+                        {
+                            ctx.fillStyle = "yellow";
+                            ctx.font = `${8 * this.noteScale}px sans-serif`;
+                        }
+
                         ctx.textBaseline = "middle";
                         ctx.fillText(lyricText, x + 4, y + h / 2);
                     }

@@ -3,7 +3,7 @@ import {
     getMeasureEvents,
     getMeasures, getParts,
     type XmlAttributes, type XmlDirection,
-    type XmlMeasure,
+    type XmlMeasure, type XmlMeasureEvent,
     type XmlNote,
     type XmlPart,
     type XmlScorePartwise
@@ -37,6 +37,32 @@ export interface TimelineMeasure {
     events: TimelineEvent[];
 }
 
+export function isPlaceholder(ev: XmlMeasureEvent, events: XmlMeasureEvent[]): boolean {
+    if (ev.type !== "note") return false;
+
+    const pitch = ev.note.pitch;
+    if (!pitch) return false; // rests never placeholders
+
+    // Must be A4
+    const isA4 =
+        pitch.step === "A" &&
+        pitch.octave === "4" &&
+        (pitch.alter ?? 0) === 0;
+
+    if (!isA4) return false;
+
+    // Check if this voice has any real notes
+    const hasRealNotesInVoice = events.some(e =>
+        e.type === "note" &&
+        e.note.voice === ev.note.voice &&                // same voice
+        e.note.pitch !== undefined &&    // pitched
+        e.note.rest !== true             // not a rest
+    );
+
+    // Placeholder = pitched A4 AND voice has no real notes
+    return !hasRealNotesInVoice;
+}
+
 // this extracts the timeline events for the measure
 // it will contain either notes or directions
 // they will be in quarter note order
@@ -57,7 +83,10 @@ export function getTimelineEventsForMeasure(
     for (const ev of events) {
         switch (ev.type) {
             case "note": {
-                tm.events.push({ id: id, qnOffset: cursor, note: ev.note});
+                if(!isPlaceholder(ev,events))
+                    tm.events.push({ id: id, qnOffset: cursor, note: ev.note});
+                else
+                    console.log("Skipped placeholder!!!");
                 cursor += ev.note.duration ?? 0;
                 break;
             }

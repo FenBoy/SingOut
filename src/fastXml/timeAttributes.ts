@@ -2,11 +2,9 @@ import {type NormalizedTime, normalizeTime, type XmlAttributes} from "./helpers"
 import {PPQ} from "./playback";
 
 export class TimeAttributes {
-    divisions: number;
     time: NormalizedTime[];
 
     constructor() {
-        this.divisions= 1;
         this.time = [
             {
                 beats: 4,
@@ -17,11 +15,6 @@ export class TimeAttributes {
 
     updateFromAttributes(attrs: XmlAttributes| undefined): void {
         if (!attrs) return;
-
-        // Update divisions only when explicitly present
-        if (attrs.divisions !== undefined) {
-            this.divisions = attrs.divisions;
-        }
 
         // Update time only when explicitly present
         if (attrs.time !== undefined) {
