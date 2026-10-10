@@ -489,6 +489,11 @@ export class PianoRoll {
         const hasPitch = this.isValidPitch(pitch);
         const sungMidi = hasPitch ? freqToMidi(pitch) : null;
 
+        let liveLyric = "";
+        let liveLyricX = 0;
+        let liveLyricY = 0;
+        let liveLyricScaleH = 0;
+
         for (const ev of this.playbackEvents) {
             if (isPlaybackNote(ev)) {
                 // const noteStart = ev.timeSeconds;
@@ -583,20 +588,56 @@ export class PianoRoll {
 
                         if(isActive)
                         {
-                            ctx.fillStyle = "black";
-                            ctx.font = `${12 * this.noteScale}px sans-serif`;
+                            // we actually want to draw the live lyric on top of everything else
+                            liveLyric = lyricText;
+                            liveLyricX = x;
+                            liveLyricY = y;
+                            liveLyricScaleH = h;
                         }
                         else
                         {
                             ctx.fillStyle = "yellow";
                             ctx.font = `${8 * this.noteScale}px sans-serif`;
+                            ctx.textBaseline = "middle";
+                            ctx.fillText(lyricText, x + 4, y + h / 2);
                         }
-
-                        ctx.textBaseline = "middle";
-                        ctx.fillText(lyricText, x + 4, y + h / 2);
                     }
                 }
             }
+        }
+
+        // if(liveLyric != "")
+        // {
+        //     ctx.fillStyle = "black";
+        //     ctx.font = `${12 * this.noteScale}px sans-serif`;
+        //     ctx.textBaseline = "middle";
+        //     ctx.fillText(liveLyric, liveLyricX + 4, liveLyricY + liveLyricScaleH / 2);
+        // }
+
+        if (liveLyric !== "") {
+            ctx.font = `${12 * this.noteScale}px sans-serif`;
+            ctx.textBaseline = "middle";
+
+            // Measure text width
+            const metrics = ctx.measureText(liveLyric);
+            const textWidth = metrics.width;
+            const textHeight = 12 * this.noteScale; // approximate height
+
+            const x = liveLyricX + 4;
+            const y = liveLyricY + liveLyricScaleH / 2;
+
+            // Background box
+            ctx.fillStyle = "rgba(0,0,0,0.7)";
+            ctx.fillRect(
+                x - 4,            // padding left
+                y - textHeight/2, // align vertically
+                textWidth + 8,    // padding right
+                textHeight        // height
+            );
+
+            // Text
+            ctx.fillStyle = "white";
+            ctx.fillText(liveLyric, x, y);
         }
     }
 

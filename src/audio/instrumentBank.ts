@@ -109,65 +109,49 @@ export interface ISoundFontInstrument {
 }
 
 export class InstrumentBank {
-    private ac: AudioContext | null = null;
-    private hasAudioContext = false;
     private defaultInst: ISoundFontInstrument | null = null;
 
-    ensureAudioContext()
-    {
-        if (!this.hasAudioContext) {
-            this.ac = new AudioContext();
-            this.hasAudioContext = true;
-        }
-    }
+    async loadDefaultInstrument(ac:AudioContext | null): Promise<void> {
 
-    async loadDefaultInstrument(): Promise<void> {
-
-        if (!this.ac) return;
-
+        if(!ac) return;
         if(this.defaultInst != null) return;
 
-        const raw = await Soundfont.instrument(this.ac, "acoustic_grand_piano");
+        const raw = await Soundfont.instrument(ac, "acoustic_grand_piano");
         const inst = raw as unknown as ISoundFontInstrument;
 
-        const gain = this.ac.createGain();
-        const pan = this.ac.createStereoPanner();
+        const gain = ac.createGain();
+        const pan = ac.createStereoPanner();
 
         inst.out.connect(gain);
         gain.connect(pan);
-        pan.connect(this.ac.destination);
+        pan.connect(ac.destination);
 
         this.defaultInst = inst;
     }
 
-    async loadInstrumentForPart(
+    async loadInstrumentForPart(ac:AudioContext | null,
         gmName: InstrumentName
     ): Promise<{ inst: ISoundFontInstrument; gain: GainNode; pan: StereoPannerNode } | undefined> {
 
-        if (!this.ac)
-            return undefined;
+        if(!ac) return undefined;
 
-        const raw = await Soundfont.instrument(this.ac, gmName);
+        const raw = await Soundfont.instrument(ac, gmName);
         const inst = raw as unknown as ISoundFontInstrument;
 
-        const gain = this.ac.createGain();
-        const pan = this.ac.createStereoPanner();
+        const gain = ac.createGain();
+        const pan = ac.createStereoPanner();
 
         // ⭐ IMPORTANT: remove default routing
         inst.out.disconnect();
 
         inst.out.connect(gain);
         gain.connect(pan);
-        pan.connect(this.ac.destination);
+        pan.connect(ac.destination);
 
         return { inst, gain, pan };
     }
 
     getDefaultInstrument()  :ISoundFontInstrument | null {
         return this.defaultInst;
-    }
-
-    now() {
-        return this.ac ? this.ac.currentTime : 0;
     }
 }

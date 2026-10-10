@@ -147,6 +147,10 @@ export class PlaySession {
     // instruments
     instrumentBank: InstrumentBank;
 
+    // PlaySession now owns the AudioContext
+    private ac: AudioContext | null = null;
+    private hasAudioContext = false;
+
     private trackReady = false;
 
     isTrackReady() {
@@ -219,7 +223,6 @@ export class PlaySession {
         return "";
     }
 
-
     constructor() {
         this.playHead = new PlayHead();
         this.mic = new Mic();
@@ -227,9 +230,17 @@ export class PlaySession {
         this.instrumentBank = new InstrumentBank();
     }
 
+    /// must be called in response to a UI interaction
     ensureAudioContext()
     {
-        this.instrumentBank.ensureAudioContext();
+        if (!this.hasAudioContext) {
+            this.ac = new AudioContext();
+            this.hasAudioContext = true;
+        }
+    }
+
+    audioNow() {
+        return this.ac ? this.ac.currentTime : 0;
     }
 
     getResults(): Results {
@@ -296,7 +307,7 @@ export class PlaySession {
         for (const part of scoreParts) {
             const gmName = resolveInstrumentName(part);
 
-            const loaded = await this.instrumentBank.loadInstrumentForPart(gmName);
+            const loaded = await this.instrumentBank.loadInstrumentForPart(this.ac, gmName);
             if (!loaded) continue;
 
             const { inst, gain, pan } = loaded;
@@ -388,7 +399,7 @@ export class PlaySession {
         const timeLine = getMergedTimeline(xml);
         this.playbackEvents = getPlayback(timeLine);
         this.populatePlayData();
-        await this.instrumentBank.loadDefaultInstrument();
+        await this.instrumentBank.loadDefaultInstrument(this.ac);
         await this.loadChannels(xml);
         this.trackReady = true;
     }
@@ -586,7 +597,7 @@ export class PlaySession {
         const inst = this.instrumentBank.getDefaultInstrument();
         if(inst)
         {
-            inst.play(midi, this.instrumentBank.now(), {
+            inst.play(midi, this.audioNow(), {
                 duration: 1,
                 gain: 0.8       // fairly high
             });

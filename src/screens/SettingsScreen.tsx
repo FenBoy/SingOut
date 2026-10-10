@@ -123,9 +123,15 @@ export function SettingsScreen({ session, onBack }: {
                                     step={0.01}
                                     value={ch.panNode.pan.value}
                                     onChange={e => changePan(ch, parseFloat(e.target.value))}
-                                    style={{ flex: 1 }}
+                                    style={{
+                                        flex: 1,
+                                        appearance: "none",
+                                        background: "transparent"
+                                    }}
+                                    className="pan-slider"
                                 />
                             </label>
+
                         </div>
                     ))}
                 </div>

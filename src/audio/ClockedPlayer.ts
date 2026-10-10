@@ -1,8 +1,8 @@
-import {type IPlayer, PlaySession} from "./PlaySession";
 import {hasPitch, isPlaybackNote, type PlaybackEvent} from "../fastXml/playback";
+import {xmlPitchToMidi} from "../fastXml/helpers";
+import {type IPlayer, PlaySession} from "./PlaySession";
 import type {PlayHead} from "./PlayHead";
 import type {InstrumentBank} from "./instrumentBank";
-import {xmlPitchToMidi} from "../fastXml/helpers";
 
 export class ClockedPlayer implements IPlayer {
     private isPlaying = false;
@@ -12,10 +12,12 @@ export class ClockedPlayer implements IPlayer {
 
     private lastScheduledTime = -Infinity;
 
-    private readonly LOOKAHEAD = 0.20;     // 200ms
-    private readonly MIN_OFFSET = 0.03;    // 30ms
+    private readonly LOOKAHEAD = 0.3;
 
     private notes: PlaybackEvent[] = [];
+
+    // NEW: audio tick handle
+    private audioTickHandle: number | null = null;
 
     constructor(
         private session: PlaySession,
@@ -39,28 +41,28 @@ export class ClockedPlayer implements IPlayer {
         if (this.isPlaying) return;
         this.isPlaying = true;
 
-        const audioNow = this.instrumentBank.now();
+        const audioNow = this.session.audioNow();   // CHANGED: use PlaySession clock
         const musicalNow = this.playHead.getCurrentTime();
 
         this.audioStartTime = audioNow;
         this.musicalStartTime = musicalNow;
         this.lastScheduledTime = musicalNow;
 
-        requestAnimationFrame(() => this.tick());
+        // START AUDIO TICK LOOP (25ms)
+        this.audioTickHandle = window.setInterval(() => this.tick(), 25);
     }
 
-    //
-    // IPlayer: pause
-    //
     pause(): void {
         this.isPlaying = false;
         this.session.stopAllInstruments();
         this.lastScheduledTime = -Infinity;
+
+        if (this.audioTickHandle !== null) {
+            clearInterval(this.audioTickHandle);
+            this.audioTickHandle = null;
+        }
     }
 
-    //
-    // IPlayer: stop
-    //
     stop(): void {
         this.isPlaying = false;
         this.session.stopAllInstruments();
@@ -68,81 +70,71 @@ export class ClockedPlayer implements IPlayer {
         this.lastScheduledTime = -Infinity;
         this.playHead.setCurrentTime(0);
 
-        this.audioStartTime = this.instrumentBank.now();
+        this.audioStartTime = this.session.audioNow();
         this.musicalStartTime = 0;
+
+        if (this.audioTickHandle !== null) {
+            clearInterval(this.audioTickHandle);
+            this.audioTickHandle = null;
+        }
     }
 
-    //
-    // IPlayer: seek
-    //
     seek(time: number): void {
         this.playHead.setCurrentTime(time);
 
-        const audioNow = this.instrumentBank.now();
-        this.audioStartTime = audioNow;
+        this.audioStartTime = this.session.audioNow();
         this.musicalStartTime = time;
-
         this.lastScheduledTime = time;
     }
 
+    //
+    // AUDIO TICK LOOP (stable scheduling)
+    //
     private tick(): void {
         if (!this.isPlaying) return;
 
-        const audioNow = this.instrumentBank.now();
-        const now = this.musicalStartTime + (audioNow - this.audioStartTime);
+        let currentTime = this.musicalStartTime + (this.session.audioNow() - this.audioStartTime);
 
-        if (now >= this.playHead.getMaxTime()) {
+        if (currentTime >= this.playHead.getMaxTime()) {
             this.isPlaying = false;
             return;
         }
-
-        // Drive PlayHead visually
-        this.playHead.setCurrentTime(now);
 
         // Looping
         const loopStart = this.playHead.getLoopStart();
         const loopEnd   = this.playHead.getLoopEnd();
 
-        if (now >= loopEnd) {
+        if (currentTime >= loopEnd) {
             this.musicalStartTime = loopStart;
-            this.audioStartTime = audioNow;
+            this.audioStartTime = this.session.audioNow();
             this.lastScheduledTime = loopStart;
-            this.playHead.setCurrentTime(loopStart);
+            currentTime = loopStart;
         }
 
-        this.scheduleWindow(now, audioNow);
+        // update the playhead
+        this.playHead.setCurrentTime(currentTime);
 
-        requestAnimationFrame(() => this.tick());
+        this.scheduleWindow(currentTime, this.session.audioNow());
     }
 
-    //
-    // Incremental scheduling
-    //
     private scheduleWindow(now: number, audioNow: number): void {
-        const windowEnd = now + this.LOOKAHEAD;
-
         let i = this.findEventIndex(now);
 
         while (i < this.notes.length) {
             const ev = this.notes[i];
             const t = ev.timeSeconds;
 
-            const dt = t - now; // event time relative to transport
+            const dt = t - now;
 
-            if (dt > this.LOOKAHEAD) break;   // outside window
-            if (dt < 0) { i++; continue; }    // already passed
+            if (dt > this.LOOKAHEAD) break;
+            if (dt < 0) { i++; continue; }
 
             if (isPlaybackNote(ev) && hasPitch(ev)) {
                 const midi = xmlPitchToMidi(ev.note.pitch);
                 const inst = this.session.getInstrumentForPart(ev.id);
-                const ch = this.session.getChannel(ev.id);
 
                 if (inst) {
-                    let start = audioNow + dt;
-
-                    if (start < audioNow + this.MIN_OFFSET) {
-                        start = audioNow + this.MIN_OFFSET;
-                    }
+                    const start = audioNow + dt;
 
                     inst.play(midi, start, {
                         duration: ev.durationSeconds,
@@ -153,12 +145,8 @@ export class ClockedPlayer implements IPlayer {
 
             i++;
         }
-
     }
 
-    //
-    // Binary search
-    //
     private findEventIndex(time: number): number {
         let low = 0;
         let high = this.notes.length - 1;
@@ -174,4 +162,5 @@ export class ClockedPlayer implements IPlayer {
         return low;
     }
 }
+
 

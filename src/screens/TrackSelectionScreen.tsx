@@ -14,6 +14,7 @@ export function TrackSelectionScreen({
                 <div
                     key={track.title}
                     onClick={() => onSelectSession(track)}
+                    style={{ cursor: "pointer" }}
                 >
                     <h3>{track.title}</h3>
                 </div>
