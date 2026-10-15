@@ -1,7 +1,6 @@
 import { useEffect, useState} from "react";
 import {PlaySession, Results} from "../audio/PlaySession";
 import { MidiViewer } from "../components/MidiViewer";
-import { LyricView} from "../components/LyricView";
 import {LoopViewer} from "../components/LoopViewer";
 import {SettingsScreen} from "./SettingsScreen";
 

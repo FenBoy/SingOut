@@ -2,7 +2,7 @@ import {hasPitch, isPlaybackNote, type PlaybackEvent} from "../fastXml/playback"
 import {xmlPitchToMidi} from "../fastXml/helpers";
 import {type IPlayer, PlaySession} from "./PlaySession";
 import type {PlayHead} from "./PlayHead";
-import type {InstrumentBank} from "./instrumentBank";
+import type {InstrumentBank} from "./InstrumentBank";
 
 export class ClockedPlayer implements IPlayer {
     private isPlaying = false;

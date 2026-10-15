@@ -7,15 +7,15 @@ export function MicSettingsScreen({ session, onBack }: {
 }) {
     const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
     const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
-    const [sensitivity, setSensitivity] = useState(session.mic.sensitivity ?? 1);
+    const [sensitivity, setSensitivity] = useState(session.getMic().sensitivity ?? 1);
     const [volume, setVolume] = useState(0);
-    const [micEnabled, setMicEnabled] = useState(session.isMicOn);
+    const [micEnabled, setMicEnabled] = useState(session.getIsMicOn());
 
     // Latency state (seconds)
     const [latency, setLatency] = useState(0);
 
     function toggleMic() {
-        if (session.isMicOn) {
+        if (session.getIsMicOn()) {
             session.setMicState(false);
             setMicEnabled(false);
         } else {
@@ -46,7 +46,7 @@ export function MicSettingsScreen({ session, onBack }: {
 
     // Apply sensitivity
     useEffect(() => {
-        session.mic.setSensitivity(sensitivity);
+        session.getMic().setSensitivity(sensitivity);
     }, [sensitivity, session]);
 
     return (
@@ -77,7 +77,7 @@ export function MicSettingsScreen({ session, onBack }: {
                     value={selectedDeviceId ?? ""}
                     onChange={(e) => {
                         setSelectedDeviceId(e.target.value);
-                        session.mic.switchDevice(e.target.value);
+                        session.getMic().switchDevice(e.target.value);
                     }}
                     style={{
                         padding: "8px",

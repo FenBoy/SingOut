@@ -3,8 +3,7 @@ import {AudioPlayer} from "./AudioPlayer";
 import {PlayHead} from "./PlayHead";
 import {Mic} from "./Mic";
 import JSZip from "jszip";
-import {TonePlayer} from "./TonePlayer";
-import {getPartList, getTitle, type XmlScorePartwise} from "../fastXml/helpers";
+import {getPartList, getPartName, getTitle, type XmlScorePartwise} from "../fastXml/helpers";
 import {
     getEventsForPart,
     getPlaybackScoreLengthSeconds,
@@ -12,7 +11,7 @@ import {
 } from "../fastXml/playback";
 import { XMLParser } from "fast-xml-parser";
 import {type AudioChannel} from "../fastXml/channels";
-import {InstrumentBank, type ISoundFontInstrument, resolveInstrumentName} from "./instrumentBank";
+import {InstrumentBank, type ISoundFontInstrument, resolveInstrumentName} from "./InstrumentBank";
 import {ClockedPlayer} from "./ClockedPlayer";
 import {TimelineFactory} from "../fastXml/stack/timelineFactory";
 import {PlaybackFactory} from "../fastXml/stack/playbackFactory";
@@ -154,6 +153,14 @@ export class PlaySession {
 
     private trackReady = false;
 
+    getMic() {
+        return this.mic;
+    }
+
+    getIsMicOn() {
+        return this.isMicOn;
+    }
+
     isTrackReady() {
         return this.trackReady;
     }
@@ -214,12 +221,11 @@ export class PlaySession {
         return this.trackTitle;
     }
 
-    getSelectedChannelTitle() {
+    getSelectedChannelTitle():string {
         const channel = this.getSelectedChannel();
         if(channel)
         {
-            const pn = channel.part.partName;
-            if (pn != null) return pn;
+            return getPartName(channel.part);
         }
         return "";
     }
@@ -522,7 +528,7 @@ export class PlaySession {
     }
 
     isMidi(): boolean {
-        return this.player instanceof TonePlayer;
+        return this.player instanceof ClockedPlayer;
     }
 
 
@@ -588,11 +594,6 @@ export class PlaySession {
 
     getPitch() {
         return this.pitch;
-    }
-
-    getIsMicOn():boolean
-    {
-        return this.isMicOn;
     }
 
     getMicVolume() {
