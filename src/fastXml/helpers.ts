@@ -85,12 +85,19 @@ export interface XmlPitch {
     alter?: number;
 }
 
+export interface XmlTimeModification {
+    actualNotes: number | string;
+    normalNotes: number | string;
+    normalType?: string;        // optional, sometimes present
+}
+
 export interface XmlNote {
     pitch?: XmlPitch;
     duration?: number;      // this is in quarter notes
     voice?: number | string;
     type?: string;
     lyric: XmlLyric | XmlLyric[];
+    timeModification?: XmlTimeModification;
     [key: string]: unknown;
 }
 
@@ -240,6 +247,19 @@ export function normalizeTime(raw: XmlTime | XmlTime[] | undefined): NormalizedT
     }
 
     return result;
+}
+
+export function normalizeVoice(v: string | number | undefined): number {
+    if (typeof v === "number") {
+        return v;
+    }
+
+    if (typeof v === "string") {
+        const n = Number(v.trim());
+        return Number.isFinite(n) ? n : 1;
+    }
+
+    return 1;
 }
 
 export function normalizeAttributes(raw: XmlAttributes | XmlAttributes[]) {
@@ -396,11 +416,73 @@ export function getPartName(part: XmlScorePart): string {
     return part["@_id"]; // fallback
 }
 
+export function getTimeModification(note: XmlNote): XmlTimeModification | null {
+    const raw = note["time-modification"];
+
+    if (!raw || typeof raw !== "object") {
+        return null;
+    }
+
+    // actual-notes
+    const actualRaw = (raw as Record<string, unknown>)["actual-notes"];
+    const actual =
+        typeof actualRaw === "string" ? Number(actualRaw) :
+            typeof actualRaw === "number" ? actualRaw :
+                NaN;
+
+    // normal-notes
+    const normalRaw = (raw as Record<string, unknown>)["normal-notes"];
+    const normal =
+        typeof normalRaw === "string" ? Number(normalRaw) :
+            typeof normalRaw === "number" ? normalRaw :
+                NaN;
+
+    if (!Number.isFinite(actual) || !Number.isFinite(normal)) {
+        return null;
+    }
+
+    // normal-type (optional)
+    const normalTypeRaw = (raw as Record<string, unknown>)["normal-type"];
+    const normalType =
+        typeof normalTypeRaw === "string" ? normalTypeRaw : undefined;
+
+    return {
+        actualNotes: actual,
+        normalNotes: normal,
+        normalType
+    };
+}
+
 export function getNotes(measureObj: XmlMeasure): XmlNote[] {
     return getMeasureEvents(measureObj)
         .filter(ev => ev.type === "note")
         .map(ev => ev.note);
 }
+
+export function getDurationQN(note: XmlNote, divisions: number): number {
+    const raw = note.duration ?? 0;
+    return raw / divisions;
+}
+
+export function getEffectiveDuration(note: XmlNote, divisions: number): number {
+    const baseQN = getDurationQN(note, divisions);
+    const tm = getTimeModification(note);
+    if (!tm) return baseQN;
+
+    const actual = Number(tm.actualNotes);
+    const normal = Number(tm.normalNotes);
+
+    if (!Number.isFinite(actual) || !Number.isFinite(normal)) {
+        return baseQN;
+    }
+
+    if (actual <= 0 || normal <= 0) {
+        return baseQN;
+    }
+
+    return baseQN * (normal / actual);
+}
+
 
 export function getLyrics(noteObj: XmlNote): XmlLyric[] {
     const lyrics = noteObj.lyric;

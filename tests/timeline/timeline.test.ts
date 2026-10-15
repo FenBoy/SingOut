@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {loadScoreFixture} from "../utils/helpers";
-import {getMergedTimeline} from "../../src/fastXml/timeline";
+import {TimelineFactory} from "../../src/fastXml/stack/timelineFactory";
 
 describe("timeline tests", () => {
     it("construct a timeline for OldMacDonaldOut.musicxml", () => {
         const score = loadScoreFixture("OldMacdonaldOut.musicxml");
-        const timeline = getMergedTimeline(score);
+
+        const tf:TimelineFactory = new TimelineFactory();
+        const timeline = tf.process(score);
 
         // 'measures' is now the important 'unit' in our system
         // this file has 4 measures
@@ -33,7 +35,8 @@ describe("timeline tests", () => {
     });
     it("construct a timeline for Chan_Mali_Chan.musicxml", () => {
         const score = loadScoreFixture("Chan_Mali_Chan.musicxml");
-        const timeline = getMergedTimeline(score);
+        const tf:TimelineFactory = new TimelineFactory();
+        const timeline = tf.process(score);
 
         // 'measures' is now the important 'unit' in our system
         // this file has 62 measures
@@ -42,7 +45,8 @@ describe("timeline tests", () => {
     });
     it("construct a timeline for Handerna.musicxml", () => {
         const score = loadScoreFixture("Handerna.musicxml");
-        const timeline = getMergedTimeline(score);
+        const tf:TimelineFactory = new TimelineFactory();
+        const timeline = tf.process(score);
 
         // 'measures' is now the important 'unit' in our system
         // this file has 138

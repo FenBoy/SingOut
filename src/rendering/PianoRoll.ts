@@ -78,9 +78,18 @@ export class PianoRoll {
         miss:   "#ff6666"
     };
 
+    VOICE_COLORS: string[] = [
+        "#000000", // v0 (MuseScore doesn't use zero)
+        "#1d1dc1", // v1
+        "#32c121", // v2
+        "rgb(78 78 78)", // v3
+        "#b61dc1" // v4 (Muse score only used 4)
+    ];
+
+
     MISS_COLOR = "rgb(255 0 0)";
 
-    STANDARD_NOTE : string = "#1d1dc1";
+    // STANDARD_NOTE : string = "#1d1dc1";
 
     ACTIVE_NOTE: string =  "#cc1e1e";
 
@@ -103,6 +112,18 @@ export class PianoRoll {
         this.attachWheelZoom();
         this.attachPinchZoom();
     }
+
+    getVoiceColor(v: string | number | undefined): string {
+        const index =
+            typeof v === "number"
+                ? v
+                : typeof v === "string"
+                    ? parseInt(v, 10)
+                    : 0; // default voice
+
+        return this.VOICE_COLORS[index % 5];
+    }
+
 
     attachWheelZoom() {
         this.canvas.addEventListener("wheel", (e) => {
@@ -557,7 +578,7 @@ export class PianoRoll {
 
                         if (!isHit && !isActive) {
                             // NEW: note hasn't been sung yet → blue
-                            fill = this.STANDARD_NOTE;   // your original blue
+                            fill = this.getVoiceColor(ev.note.voice);   // your original blue
                         } else if (!isHit && isActive) {
                             // active but not hit → your original active red
                             fill = this.ACTIVE_NOTE;
@@ -570,7 +591,7 @@ export class PianoRoll {
                         }
 
                         ctx.fillStyle = fill;
-                        ctx.strokeStyle = "#1e40af";
+                        ctx.strokeStyle = this.getVoiceColor(ev.note.voice);
                         ctx.lineWidth = 2;
 
                         if (this.clickedNoteId === ev) {

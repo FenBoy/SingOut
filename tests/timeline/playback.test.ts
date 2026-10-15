@@ -1,13 +1,25 @@
 import { describe, it, expect } from "vitest";
 import {loadScoreFixture} from "../utils/helpers";
-import {getMergedTimeline} from "../../src/fastXml/timeline";
-import {getEventsForPart, getPlayback, getPlaybackScoreLengthSeconds, isPlaybackNote} from "../../src/fastXml/playback";
+import {
+    getPlaybackScoreLengthSeconds,
+} from "../../src/fastXml/playback";
+import {TimelineFactory} from "../../src/fastXml/stack/timelineFactory";
+import {PlaybackFactory} from "../../src/fastXml/stack/playbackFactory";
+import {logTimelineEvent} from "../../src/fastXml/debug/logging";
 
 describe("playback tests", () => {
-    it("construct a playback for OldMacDonaldOut.musicxml", () => {
+    it("factory approach for OldMacDonaldOut.musicxml", () => {
         const score = loadScoreFixture("OldMacdonaldOut.musicxml");
-        const timeline = getMergedTimeline(score);
-        const playback = getPlayback(timeline);
+
+        const tf:TimelineFactory = new TimelineFactory();
+        const timeline = tf.process(score);
+
+        timeline.forEach(t => {
+            console.log(t);
+        })
+
+        const pf:PlaybackFactory = new PlaybackFactory();
+        const playback = pf.process(timeline);
 
         // 4 bars of 4 quarter notes at 120 bpm
         // 16 beats at 2 beats per seconds = 8 seconds
@@ -20,8 +32,10 @@ describe("playback tests", () => {
     });
     it("construct a playback for FastMacDonald.musicxml", () => {
         const score = loadScoreFixture("FastMacdonald.musicxml");
-        const timeline = getMergedTimeline(score);
-        const playback = getPlayback(timeline);
+        const tf:TimelineFactory = new TimelineFactory();
+        const timeline = tf.process(score);
+        const pf:PlaybackFactory = new PlaybackFactory();
+        const playback = pf.process(timeline);
 
         // 4 bars of 4 quarter notes at 240 bpm
         // 16 beats at 2 beats per seconds = 4 seconds
@@ -31,49 +45,60 @@ describe("playback tests", () => {
         expect(playback).toBeDefined();
         // console.log(playback);
     });
-    it("validate piano roll for Handerna.musicxml", () => {
+    it("validate playback for Handerna.musicxml", () => {
         const score = loadScoreFixture("Handerna.musicxml");
-        const timeline = getMergedTimeline(score);
 
-        // const parts = score["part-list"];
-        //console.log(parts);
+        const tf:TimelineFactory = new TimelineFactory();
+        const timeline = tf.process(score);
 
-        // console.log("---------------------Handerna Sop");
-        //console.log(filtered);
+        const pf:PlaybackFactory = new PlaybackFactory();
+        const playback = pf.process(timeline);
 
-        // this first measure should have 8 1/8th notes
-        // evenly spaced
-
-        // check the timeline for a start
-        const m1 = timeline[0];
-        // console.log(m1);
-
-        m1.events.forEach(ev => {
-            if ("note" in ev) {
-                if(ev.id == "P1") console.log("Note:", ev.note);
-            }
-        });
-
-        const playback = getPlayback(timeline);
-        const filtered = getEventsForPart(playback, "P1");
-        expect(filtered).toBeDefined();
-        expect(filtered.length).toBeGreaterThan(20); // just a ball park
-        for(let i = 0; i < 20; i++)
+        let lastTime =  0;
+        for(let i = 0; i < playback.length; i++)
         {
-            const p = filtered[i];
-            console.log("filtered:", p);
-            if(isPlaybackNote(p))
-            {
-                console.log("p:", p.timeSeconds, p.durationSeconds, p.note.pitch);
-            }
+            expect(playback[i].timeSeconds).toBeGreaterThanOrEqual(lastTime);
+            lastTime = playback[i].timeSeconds;
+        }
+    });
+    it("validate playback for HandernaTest2.musicxml", () => {
+        const score = loadScoreFixture("HandernaTest2.musicxml");
+
+        const tf:TimelineFactory = new TimelineFactory();
+        const timeline = tf.process(score);
+
+        const pf:PlaybackFactory = new PlaybackFactory();
+        const playback = pf.process(timeline);
+
+        let lastTime =  0;
+        for(let i = 0; i < playback.length; i++)
+        {
+            expect(playback[i].timeSeconds).toBeGreaterThanOrEqual(lastTime);
+            lastTime = playback[i].timeSeconds;
+        }
+    });
+    it("validate playback for ChanTest.musicxml", () => {
+        const score = loadScoreFixture("ChanTest.musicxml");
+
+        const tf:TimelineFactory = new TimelineFactory();
+        const timeline = tf.process(score);
+
+        for(let i = 0; i < timeline.length; i++)
+        {
+            console.log("measure: ", i, timeline[i].name)
+            const measure = timeline[i];
+            measure.events.forEach(e => logTimelineEvent(e));
         }
 
-        // console.log(playback);
+        const pf:PlaybackFactory = new PlaybackFactory();
+        const playback = pf.process(timeline);
 
-        //  note: Bar 10, beat 4 is wrong. Add check to see why
-
-        // Chan Mali Chan. Alto line is all wrong syncopation and rests
-
-
+        let lastTime =  0;
+        for(let i = 0; i < playback.length; i++)
+        {
+            console.log(playback[i]);
+            expect(playback[i].timeSeconds).toBeGreaterThanOrEqual(lastTime);
+            lastTime = playback[i].timeSeconds;
+        }
     });
 });

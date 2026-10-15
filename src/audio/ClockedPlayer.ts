@@ -19,6 +19,8 @@ export class ClockedPlayer implements IPlayer {
     // NEW: audio tick handle
     private audioTickHandle: number | null = null;
 
+    private lastIndex = 0;
+
     constructor(
         private session: PlaySession,
         private readonly playHead: PlayHead,
@@ -69,6 +71,7 @@ export class ClockedPlayer implements IPlayer {
 
         this.lastScheduledTime = -Infinity;
         this.playHead.setCurrentTime(0);
+        this.lastIndex = 0;
 
         this.audioStartTime = this.session.audioNow();
         this.musicalStartTime = 0;
@@ -85,6 +88,12 @@ export class ClockedPlayer implements IPlayer {
         this.audioStartTime = this.session.audioNow();
         this.musicalStartTime = time;
         this.lastScheduledTime = time;
+
+        // Reset scheduling
+        this.lastIndex = this.findEventIndex(time);
+
+        // Reset transport state
+        this.lastScheduledTime = -Infinity;
     }
 
     //
@@ -109,6 +118,7 @@ export class ClockedPlayer implements IPlayer {
             this.audioStartTime = this.session.audioNow();
             this.lastScheduledTime = loopStart;
             currentTime = loopStart;
+            this.lastIndex = this.findEventIndex(loopStart);
         }
 
         // update the playhead
@@ -118,49 +128,61 @@ export class ClockedPlayer implements IPlayer {
     }
 
     private scheduleWindow(now: number, audioNow: number): void {
-        let i = this.findEventIndex(now);
+        const cutoff = now + this.LOOKAHEAD;
 
-        while (i < this.notes.length) {
-            const ev = this.notes[i];
+        while (this.lastIndex < this.notes.length) {
+            const ev = this.notes[this.lastIndex];
             const t = ev.timeSeconds;
 
-            const dt = t - now;
+            console.log(this.lastIndex, this.notes[this.lastIndex]);
 
-            if (dt > this.LOOKAHEAD) break;
-            if (dt < 0) { i++; continue; }
+            // If event is beyond the window, stop.
+            if (t > cutoff) break;
 
+            // If event is behind the window, skip it.
+            if (t < now) {
+                this.lastIndex++;
+                console.log("skipping", this.lastIndex);
+                continue;
+            }
+
+            // Schedule notes
             if (isPlaybackNote(ev) && hasPitch(ev)) {
                 const midi = xmlPitchToMidi(ev.note.pitch);
                 const inst = this.session.getInstrumentForPart(ev.id);
 
                 if (inst) {
+                    const dt = t - now;
                     const start = audioNow + dt;
 
                     inst.play(midi, start, {
                         duration: ev.durationSeconds,
                         gain: 0.8
                     });
+
+                    console.log("play", midi, ev.durationSeconds);
                 }
             }
 
-            i++;
+            this.lastIndex++;
         }
     }
 
     private findEventIndex(time: number): number {
         let low = 0;
-        let high = this.notes.length - 1;
+        let high = this.notes.length;
 
-        while (low <= high) {
+        while (low < high) {
             const mid = (low + high) >>> 1;
             const t = this.notes[mid].timeSeconds;
 
-            if (t < time) low = mid + 1;
-            else high = mid - 1;
+            if (t <= time) low = mid + 1;
+            else high = mid;
         }
 
         return low;
     }
+
 }
 
 

@@ -6,15 +6,16 @@ import JSZip from "jszip";
 import {TonePlayer} from "./TonePlayer";
 import {getPartList, getTitle, type XmlScorePartwise} from "../fastXml/helpers";
 import {
-    getEventsForPart, getPlayback,
+    getEventsForPart,
     getPlaybackScoreLengthSeconds,
     getStartingTempoFromPlayback, type PlaybackEvent
 } from "../fastXml/playback";
 import { XMLParser } from "fast-xml-parser";
 import {type AudioChannel} from "../fastXml/channels";
-import {getMergedTimeline} from "../fastXml/timeline";
 import {InstrumentBank, type ISoundFontInstrument, resolveInstrumentName} from "./instrumentBank";
 import {ClockedPlayer} from "./ClockedPlayer";
+import {TimelineFactory} from "../fastXml/stack/timelineFactory";
+import {PlaybackFactory} from "../fastXml/stack/playbackFactory";
 
 export const BASE_URL = "https://raw.githubusercontent.com/FenBoy/GlobalVoices/main";
 
@@ -396,8 +397,13 @@ export class PlaySession {
         // this.referenceScore = createMidiScore(expanded);
         this.referenceScore = xml;
         this.trackTitle = getTitle(xml);
-        const timeLine = getMergedTimeline(xml);
-        this.playbackEvents = getPlayback(timeLine);
+
+        const tf:TimelineFactory = new TimelineFactory();
+        const timeline = tf.process(xml);
+
+        const pf:PlaybackFactory = new PlaybackFactory();
+        this.playbackEvents = pf.process(timeline);
+
         this.populatePlayData();
         await this.instrumentBank.loadDefaultInstrument(this.ac);
         await this.loadChannels(xml);
